@@ -1,7 +1,7 @@
 # details_panel.py
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QScrollArea, QGroupBox, QListWidget,
-    QListWidgetItem, QTextEdit, QPushButton, QLabel
+    QListWidgetItem, QTextEdit, QPushButton, QLabel, QSizePolicy
 )
 from PyQt5.QtGui import QFont, QPixmap
 from PyQt5.QtCore import Qt, QSize, QUrl
@@ -23,7 +23,8 @@ class DetailsPanelBuilder:
         host = self.host
         host.details_panel = QScrollArea()
         host.details_panel.setWidgetResizable(True)
-        host.details_panel.setStyleSheet(f"""
+        host.details_panel.setStyleSheet(
+            f"""
             QScrollArea {{
                 border: none;
                 background-color: {BACKGROUND_COLOR.name()};
@@ -36,17 +37,21 @@ class DetailsPanelBuilder:
                 background-color: transparent;
                 color: {SECONDARY_TEXT.name()};
             }}
-        """)
+            """
+        )
 
         details_container = QWidget()
-        details_container.setStyleSheet(f"background-color: {BACKGROUND_COLOR.name()}; color: {TEXT_COLOR.name()};")
+        details_container.setStyleSheet(
+            f"background-color: {BACKGROUND_COLOR.name()}; color: {TEXT_COLOR.name()};"
+        )
         details_layout = QVBoxLayout(details_container)
         details_layout.setContentsMargins(20, 20, 20, 20)
         details_layout.setSpacing(20)
 
-        # Header with image + controls and info block
+        # Header (left image + carousel, right info block)
         header_layout = QHBoxLayout()
 
+        # Image + carousel
         image_container = QWidget()
         image_container_layout = QVBoxLayout(image_container)
         image_container_layout.setContentsMargins(0, 0, 0, 0)
@@ -55,11 +60,13 @@ class DetailsPanelBuilder:
         host.model_image = QLabel()
         host.model_image.setFixedSize(300, 300)
         host.model_image.setAlignment(Qt.AlignCenter)
-        host.model_image.setStyleSheet(f"""
+        host.model_image.setStyleSheet(
+            f"""
             background-color: {BACKGROUND_COLOR.name()};
             border: 1px solid {PRIMARY_COLOR.name()};
             border-radius: 6px;
-        """)
+            """
+        )
         image_container_layout.addWidget(host.model_image, alignment=Qt.AlignCenter)
 
         carousel_controls = QWidget()
@@ -87,18 +94,60 @@ class DetailsPanelBuilder:
         image_container_layout.addWidget(carousel_controls)
         header_layout.addWidget(image_container)
 
-        info_layout = QVBoxLayout()
+        # Info block with constrained width so long titles don't stretch splitter
+        info_container = QWidget()
+        info_container.setMaximumWidth(520)  # cap width
+        info_layout = QVBoxLayout(info_container)
+        info_layout.setContentsMargins(0, 0, 0, 0)
+        info_layout.setSpacing(6)
         info_layout.setAlignment(Qt.AlignTop)
 
         host.model_name = QLabel()
+        host.model_name.setWordWrap(True)
         host.model_name.setFont(QFont("Segoe UI", 16, QFont.Bold))
         host.model_name.setStyleSheet(f"color: {PRIMARY_COLOR.name()};")
+        host.model_name.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
         info_layout.addWidget(host.model_name)
+
+        host.model_id_label = QLabel()
+        host.model_id_label.setFont(QFont("Segoe UI", 10))
+        host.model_id_label.setStyleSheet(
+            f"color: {SECONDARY_TEXT.name()}; text-decoration: underline;"
+        )
+        host.model_id_label.setCursor(Qt.PointingHandCursor)
+        host.model_id_label.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+        info_layout.addWidget(host.model_id_label)
 
         host.model_creator = QLabel()
         host.model_creator.setFont(QFont("Segoe UI", 12))
         host.model_creator.setStyleSheet(f"color: {TEXT_COLOR.name()};")
         info_layout.addWidget(host.model_creator)
+
+        tags_row = QHBoxLayout()
+        tags_row.setSpacing(8)
+        host.model_type_label = QLabel()
+        host.model_type_label.setFont(QFont("Segoe UI", 10))
+        host.model_type_label.setStyleSheet(
+            f"background-color: {PRIMARY_COLOR.name()}; color: white; padding: 2px 6px; border-radius: 4px;"
+        )
+        tags_row.addWidget(host.model_type_label)
+
+        host.model_primary_tag_label = QLabel()
+        host.model_primary_tag_label.setFont(QFont("Segoe UI", 10))
+        host.model_primary_tag_label.setStyleSheet(
+            f"background-color: {SECONDARY_TEXT.name()}; color: white; padding: 2px 6px; border-radius: 4px;"
+        )
+        tags_row.addWidget(host.model_primary_tag_label)
+
+        host.model_base_tag = QLabel()
+        host.model_base_tag.setFont(QFont("Segoe UI", 10))
+        host.model_base_tag.setStyleSheet(
+            "background-color: #4caf50; color: white; padding: 2px 6px; border-radius: 4px;"
+        )
+        tags_row.addWidget(host.model_base_tag)
+
+        tags_row.addStretch()
+        info_layout.addLayout(tags_row)
 
         host.model_base_model = QLabel()
         host.model_base_model.setFont(QFont("Segoe UI", 11))
@@ -118,7 +167,8 @@ class DetailsPanelBuilder:
         stats_layout = QHBoxLayout()
 
         downloads_box = QGroupBox("Downloads")
-        downloads_box.setStyleSheet(f"""
+        downloads_box.setStyleSheet(
+            f"""
             QGroupBox {{
                 color: {SECONDARY_TEXT.name()};
                 font-size: 10pt;
@@ -131,7 +181,8 @@ class DetailsPanelBuilder:
                 left: 10px;
                 padding: 0 5px;
             }}
-        """)
+            """
+        )
         downloads_layout = QVBoxLayout(downloads_box)
         host.downloads_count = QLabel("0")
         host.downloads_count.setFont(QFont("Segoe UI", 14, QFont.Bold))
@@ -140,7 +191,8 @@ class DetailsPanelBuilder:
         stats_layout.addWidget(downloads_box)
 
         ratings_box = QGroupBox("Ratings")
-        ratings_box.setStyleSheet(f"""
+        ratings_box.setStyleSheet(
+            f"""
             QGroupBox {{
                 color: {SECONDARY_TEXT.name()};
                 font-size: 10pt;
@@ -153,7 +205,8 @@ class DetailsPanelBuilder:
                 left: 10px;
                 padding: 0 5px;
             }}
-        """)
+            """
+        )
         ratings_layout = QVBoxLayout(ratings_box)
         host.ratings_count = QLabel("0")
         host.ratings_count.setFont(QFont("Segoe UI", 14, QFont.Bold))
@@ -165,7 +218,8 @@ class DetailsPanelBuilder:
 
         host.open_browser_btn = QPushButton("Open on Civitai")
         host.open_browser_btn.setFont(QFont("Segoe UI", 10))
-        host.open_browser_btn.setStyleSheet(f"""
+        host.open_browser_btn.setStyleSheet(
+            f"""
             QPushButton {{
                 background-color: {CARD_BACKGROUND.name()};
                 color: {TEXT_COLOR.name()};
@@ -178,16 +232,20 @@ class DetailsPanelBuilder:
                 background-color: {PRIMARY_COLOR.name()};
                 color: white;
             }}
-        """)
+            """
+        )
         host.open_browser_btn.setFixedHeight(35)
         host.open_browser_btn.clicked.connect(host.open_model_in_browser)
         info_layout.addWidget(host.open_browser_btn)
 
-        header_layout.addLayout(info_layout)
+        header_layout.addWidget(info_container, stretch=0)
+        header_layout.addStretch()
         details_layout.addLayout(header_layout)
 
+        # Versions group
         version_group = QGroupBox("Available Versions")
-        version_group.setStyleSheet(f"""
+        version_group.setStyleSheet(
+            f"""
             QGroupBox {{
                 color: {SECONDARY_TEXT.name()};
                 font-size: 11pt;
@@ -200,11 +258,13 @@ class DetailsPanelBuilder:
                 left: 10px;
                 padding: 0 5px;
             }}
-        """)
+            """
+        )
         version_layout = QVBoxLayout(version_group)
 
         host.version_list = QListWidget()
-        host.version_list.setStyleSheet(f"""
+        host.version_list.setStyleSheet(
+            f"""
             QListWidget {{
                 background-color: {BACKGROUND_COLOR.name()};
                 color: {TEXT_COLOR.name()};
@@ -219,7 +279,8 @@ class DetailsPanelBuilder:
                 background-color: {PRIMARY_COLOR.name()};
                 color: white;
             }}
-        """)
+            """
+        )
         host.version_list.setFixedHeight(150)
         host.version_list.itemSelectionChanged.connect(host.version_selected)
         version_layout.addWidget(host.version_list)
@@ -227,7 +288,8 @@ class DetailsPanelBuilder:
         host.trigger_words = QTextEdit()
         host.trigger_words.setReadOnly(True)
         host.trigger_words.setFont(QFont("Consolas", 10))
-        host.trigger_words.setStyleSheet(f"""
+        host.trigger_words.setStyleSheet(
+            f"""
             QTextEdit {{
                 background-color: {BACKGROUND_COLOR.name()};
                 color: {TEXT_COLOR.name()};
@@ -235,8 +297,11 @@ class DetailsPanelBuilder:
                 border-radius: 4px;
                 padding: 10px;
             }}
-        """)
-        host.trigger_words.setPlaceholderText("Trigger words will appear here when a version is selected")
+            """
+        )
+        host.trigger_words.setPlaceholderText(
+            "Trigger words will appear here when a version is selected"
+        )
         version_layout.addWidget(host.trigger_words)
 
         host.security_warning_label = QLabel()
@@ -257,7 +322,8 @@ class DetailsPanelBuilder:
 
         host.download_btn = QPushButton("Download Selected Version")
         host.download_btn.setFont(QFont("Segoe UI", 12, QFont.Bold))
-        host.download_btn.setStyleSheet(f"""
+        host.download_btn.setStyleSheet(
+            f"""
             QPushButton {{
                 background-color: {PRIMARY_COLOR.name()};
                 color: white;
@@ -272,7 +338,8 @@ class DetailsPanelBuilder:
                 background-color: #555;
                 color: #888;
             }}
-        """)
+            """
+        )
         host.download_btn.setFixedHeight(45)
         host.download_btn.setEnabled(False)
         host.download_btn.clicked.connect(host.download_selected_version)
@@ -280,8 +347,10 @@ class DetailsPanelBuilder:
 
         details_layout.addWidget(version_group)
 
+        # Description group
         desc_group = QGroupBox("Description")
-        desc_group.setStyleSheet(f"""
+        desc_group.setStyleSheet(
+            f"""
             QGroupBox {{
                 color: {SECONDARY_TEXT.name()};
                 font-size: 11pt;
@@ -294,20 +363,23 @@ class DetailsPanelBuilder:
                 left: 10px;
                 padding: 0 5px;
             }}
-        """)
+            """
+        )
         desc_layout = QVBoxLayout(desc_group)
 
         host.description = QTextEdit()
         host.description.setReadOnly(True)
         host.description.setFont(QFont("Segoe UI", 10))
-        host.description.setStyleSheet(f"""
+        host.description.setStyleSheet(
+            f"""
             QTextEdit {{
                 background-color: {BACKGROUND_COLOR.name()};
                 color: {TEXT_COLOR.name()};
                 border: none;
                 padding: 10px;
             }}
-        """)
+            """
+        )
         desc_layout.addWidget(host.description)
 
         details_layout.addWidget(desc_group)

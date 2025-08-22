@@ -25,6 +25,9 @@ from PyQt5.QtCore import (
 from PyQt5.QtWidgets import QSystemTrayIcon
 from PyQt5.QtGui import QMovie
 from PyQt5.QtSql import QSqlDatabase, QSqlQuery, QSqlTableModel
+from PyQt5.QtGui import QGuiApplication
+from PyQt5.QtWidgets import QGraphicsColorizeEffect
+from PyQt5.QtCore import QPropertyAnimation, QSequentialAnimationGroup
 
 from ui_components import ModelCard, DownloadProgressWidget
 from ui_helpers import ImageLoaderThread, FileSelectionDialog
@@ -78,6 +81,12 @@ class MainWindow(QMainWindow):
             self.download_manager.downloads_changed.connect(self.update_downloads_panel)
             self.download_manager.download_started.connect(self._notify_download_started)
             self.download_manager.download_queued.connect(self._notify_download_queued)
+            # show noticeable message boxes when a download is started or queued
+            try:
+                self.download_manager.download_started.connect(self._modal_download_started)
+                self.download_manager.download_queued.connect(self._modal_download_queued)
+            except Exception:
+                pass
         except Exception:
             pass
         self.current_model = None
@@ -145,6 +154,19 @@ class MainWindow(QMainWindow):
                 self.tray.showMessage("Civitai Manager", msg, QSystemTrayIcon.Information, 5000)
         except Exception:
             pass
+
+    def _modal_download_started(self, file_name: str):
+        try:
+            # Non-blocking information dialog that is still clearly visible
+            QMessageBox.information(self, "Download Started", f"The model file is now downloading:\n\n{file_name}", QMessageBox.Ok)
+        except Exception:
+            pass
+
+    def _modal_download_queued(self, file_name: str):
+        try:
+            QMessageBox.information(self, "Download Queued", f"The model file was queued and will start when a slot is free:\n\n{file_name}", QMessageBox.Ok)
+        except Exception:
+            pass
     
     def init_ui(self):
         # Create main central widget
@@ -171,6 +193,7 @@ class MainWindow(QMainWindow):
         # Create main splitter
         splitter = QSplitter(Qt.Horizontal)
         splitter.setStyleSheet(f"QSplitter::handle {{ background-color: {PRIMARY_COLOR.name()}; }}")
+        self.splitter = splitter  # keep reference
         main_layout.addWidget(splitter)
         
         # Left panel - Model list
@@ -222,17 +245,17 @@ class MainWindow(QMainWindow):
         self.model_type_combo.addItem("Checkpoints", "Checkpoint")
         self.model_type_combo.addItem("LoRAs", "LORA")
         self.model_type_combo.addItem("Textures", "Textures")  # Keep consistent with API map
-        self.model_type_combo.addItem("Hypernetworks", "Hypernet")
-        self.model_type_combo.addItem("Embeddings", "Embeddings")
-        self.model_type_combo.addItem("Aesthetic Gradients", "Aesthetic")
+        self.model_type_combo.addItem("Hypernetworks", "Hypernetwork")
+        self.model_type_combo.addItem("Embeddings", "TextualInversion")
+        self.model_type_combo.addItem("Aesthetic Gradients", "AestheticGradient")
         # Base model filter (SD 1.5, Illustrious, SDXL, Pony, NoobAI, etc.)
         self.base_model_combo = QComboBox()
         self.base_model_combo.addItem("Any Base", None)
-        self.base_model_combo.addItem("SD 1.5", "sd-1.5")
+        self.base_model_combo.addItem("SD 1.5", "SD 1.5")
         self.base_model_combo.addItem("Illustrious", "illustrious")
-        self.base_model_combo.addItem("SDXL", "sdxl")
+        self.base_model_combo.addItem("SDXL", "SDXL 1.0")
         self.base_model_combo.addItem("Pony", "pony")
-        self.base_model_combo.addItem("NoobAI (NAI)", "noobai")
+        self.base_model_combo.addItem("NoobAI (NAI)", "NoobAI")
         # Only the search input lives in the search bar to maximize space
         search_layout.addWidget(self.search_input)
         search_layout.setStretch(0, 3)
@@ -354,6 +377,22 @@ class MainWindow(QMainWindow):
 
         # Set initial sizes
         splitter.setSizes([400, 800])
+        # Enforce fixed width for right panel (~740px) while letting only left panel flex
+        try:
+            fixed_width = 660
+            self.right_panel.setMinimumWidth(fixed_width)
+            self.right_panel.setMaximumWidth(fixed_width)
+            # Ensure left panel has a reasonable minimum
+            self.model_list_container.setMinimumWidth(320)
+            splitter.setStretchFactor(0, 1)
+            splitter.setStretchFactor(1, 0)
+            # Remove any previous splitterMoved handlers risking recursion
+            try:
+                splitter.splitterMoved.disconnect()
+            except Exception:
+                pass
+        except Exception:
+            pass
 
         # Show welcome panel initially
         self.right_panel.setCurrentIndex(3)
@@ -900,6 +939,17 @@ class MainWindow(QMainWindow):
         try:
             query = self.search_input.text()
             model_type = self.model_type_combo.currentData()
+            # Expand model_type filter: when user selects LORA, also include Lycoris(LoCon) and DoRA
+            def _normalize_type(s):
+                return str(s or '').lower().replace(' ', '').replace('-', '')
+
+            allowed_types = None
+            if model_type and isinstance(model_type, str) and _normalize_type(model_type) == 'lora':
+                allowed_types = ['lora', 'lycoris', 'dora', 'locon']
+                # to ensure broader results from API, don't send the strict type filter
+                api_model_type = None
+            else:
+                api_model_type = model_type if model_type != 'all' else None
             base_model = self.base_model_combo.currentData()
             sort = self.sort_combo.currentData()
             period = self.period_combo.currentData()
@@ -927,7 +977,7 @@ class MainWindow(QMainWindow):
             if query and base_model:
                 models_raw = self.api.search_models(
                     query=query,
-                    model_type=model_type,
+                    model_type=api_model_type,
                     base_model=None,
                     nsfw=nsfw,
                     sort=sort,
@@ -937,6 +987,15 @@ class MainWindow(QMainWindow):
                 )
                 items = models_raw.get('items', [])
                 filtered = [m for m in items if self._matches_base_model(m, base_model)]
+                # apply expanded type filtering if requested
+                if allowed_types:
+                    def _type_ok(m):
+                        t = (m.get('type') or m.get('modelType') or '')
+                        if not isinstance(t, str):
+                            return False
+                        nt = t.lower().replace(' ', '').replace('-', '')
+                        return any(k in nt for k in allowed_types)
+                    filtered = [m for m in filtered if _type_ok(m)]
                 # keep metadata from raw response but override items for display
                 models = {'items': filtered, 'metadata': models_raw.get('metadata', {})}
             else:
@@ -945,7 +1004,7 @@ class MainWindow(QMainWindow):
                 try:
                     models = self.api.search_models(
                         query=query,
-                        model_type=model_type,
+                        model_type=api_model_type,
                         base_model=base_model,
                         nsfw=nsfw,
                         sort=sort,
@@ -967,17 +1026,27 @@ class MainWindow(QMainWindow):
                             cursor=self.search_cursor
                         )
                         items = models_raw.get('items', [])
-                        # client-side filter for model_type
-                        type_key = str(model_type or '').lower() if model_type else None
-                        if type_key:
-                            filtered = []
-                            for m in items:
+                        # client-side filter for model_type (with expanded LORA mapping)
+                        if allowed_types:
+                            def _type_ok(m):
                                 t = (m.get('type') or m.get('modelType') or '')
-                                if isinstance(t, str) and t.lower().replace(' ', '') == type_key.replace(' ', ''):
-                                    filtered.append(m)
+                                if not isinstance(t, str):
+                                    return False
+                                nt = t.lower().replace(' ', '').replace('-', '')
+                                return any(k in nt for k in allowed_types)
+                            filtered = [m for m in items if _type_ok(m)]
                             models = {'items': filtered, 'metadata': models_raw.get('metadata', {})}
                         else:
-                            models = models_raw
+                            type_key = str(model_type or '').lower() if model_type else None
+                            if type_key:
+                                filtered = []
+                                for m in items:
+                                    t = (m.get('type') or m.get('modelType') or '')
+                                    if isinstance(t, str) and t.lower().replace(' ', '') == type_key.replace(' ', ''):
+                                        filtered.append(m)
+                                models = {'items': filtered, 'metadata': models_raw.get('metadata', {})}
+                            else:
+                                models = models_raw
                     except Exception:
                         raise
 
@@ -1182,15 +1251,21 @@ class MainWindow(QMainWindow):
             self.model_grid_layout.addWidget(card, row, col)
 
     def resizeEvent(self, event):
-        # Reflow cards when window resized
         try:
-            super().resizeEvent(event)
+            if getattr(self, '_enforcing_splitter', False):
+                super().resizeEvent(event)
+                return
+            if hasattr(self, 'splitter') and hasattr(self, 'right_panel'):
+                fixed_width = self.right_panel.maximumWidth()
+                if fixed_width > 0:
+                    total = self.splitter.size().width()
+                    left_width = max(self.model_list_container.minimumWidth(), total - fixed_width)
+                    self._enforcing_splitter = True
+                    self.splitter.setSizes([left_width, fixed_width])
+                    self._enforcing_splitter = False
         except Exception:
-            pass
-        try:
-            self.relayout_model_cards()
-        except Exception:
-            pass
+            self._enforcing_splitter = False
+        super().resizeEvent(event)
     
     def load_model_image(self, card, image_url):
         # pass authorization header if available so NSFW images or gated images load
@@ -1308,9 +1383,132 @@ class MainWindow(QMainWindow):
         creator_name = creator.get('username') if isinstance(creator, dict) else str(creator) if creator else 'Unknown'
         self.model_creator.setText(f"by {creator_name}")
 
+        # Populate model type, primary tag, and compact base tag under the title
+        try:
+            raw_type = model_data.get('type') or model_data.get('modelType') or model_data.get('model_type') or ''
+            type_map = {
+                'LORA': 'LoRA',
+                'Embeddings': 'Embedding',
+                'TextualInversion': 'Textual Inversion',
+                'Hypernetwork': 'Hypernetwork',
+                'Checkpoint': 'Checkpoint',
+                'Aesthetic': 'Aesthetic Gradient',
+                'Textures': 'Textures'
+            }
+            type_label = type_map.get(raw_type, str(raw_type)) if raw_type else ''
+            try:
+                self.model_type_label.setText(type_label)
+                self.model_type_label.setVisible(bool(type_label))
+            except Exception:
+                pass
+
+            tags = model_data.get('tags') or []
+            primary_tag = ''
+            if tags:
+                first = tags[0]
+                if isinstance(first, dict):
+                    primary_tag = first.get('name', '')
+                else:
+                    primary_tag = str(first)
+            try:
+                self.model_primary_tag_label.setText(primary_tag)
+                self.model_primary_tag_label.setVisible(bool(primary_tag))
+            except Exception:
+                pass
+
+            # compact base tag (prefer model-level baseModel or first version)
+            base_model_name = ''
+            if isinstance(model_data.get('baseModel'), str):
+                base_model_name = model_data.get('baseModel')
+            else:
+                versions = model_data.get('modelVersions') or model_data.get('versions') or []
+                if versions and isinstance(versions[0], dict):
+                    bm = versions[0].get('baseModel') or versions[0].get('base_model')
+                    if isinstance(bm, str):
+                        base_model_name = bm
+            try:
+                self.model_base_tag.setText(base_model_name)
+                self.model_base_tag.setVisible(bool(base_model_name))
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+        # Model ID label: show and make clickable to copy the raw ID (ensure always executed)
+        try:
+            model_id = str(model_data.get('id') or model_data.get('model_id') or '')
+            if model_id:
+                self.model_id_label.setText(f"ID: {model_id}")
+                self.model_id_label.setVisible(True)
+
+                def _on_id_click(event, mid=model_id):
+                    try:
+                        QGuiApplication.clipboard().setText(str(mid))
+                    except Exception:
+                        pass
+                    try:
+                        effect = QGraphicsColorizeEffect()
+                        effect.setColor(QColor('#4caf50'))
+                        effect.setStrength(0.0)
+                        self.model_id_label.setGraphicsEffect(effect)
+                        anim_in = QPropertyAnimation(effect, b"strength")
+                        anim_in.setStartValue(0.0)
+                        anim_in.setEndValue(1.0)
+                        anim_in.setDuration(220)
+                        anim_out = QPropertyAnimation(effect, b"strength")
+                        anim_out.setStartValue(1.0)
+                        anim_out.setEndValue(0.0)
+                        anim_out.setDuration(700)
+                        seq = QSequentialAnimationGroup(self)
+                        seq.addAnimation(anim_in)
+                        seq.addAnimation(anim_out)
+                        seq.start()
+                    except Exception:
+                        pass
+
+                try:
+                    self.model_id_label.mousePressEvent = _on_id_click
+                except Exception:
+                    pass
+            else:
+                self.model_id_label.setVisible(False)
+        except Exception:
+            try:
+                self.model_id_label.setVisible(False)
+            except Exception:
+                pass
+
         # robust numeric extraction
         downloads = self._safe_get_number(model_data, ('downloadCount', 'downloads', 'download_count', 'downloadCount'))
         ratings = self._safe_get_number(model_data, ('ratingCount', 'rating_count', 'ratings', 'ratingsCount'))
+        # Fallback: check nested stats dict if counts are zero
+        try:
+            if (not downloads) or downloads == 0:
+                stats = model_data.get('stats') or {}
+                downloads = self._safe_get_number(stats, ('downloadCount', 'downloads')) or downloads
+            if (not ratings) or ratings == 0:
+                stats = model_data.get('stats') or {}
+                ratings = self._safe_get_number(stats, ('ratingCount', 'ratings')) or ratings
+        except Exception:
+            pass
+        # Secondary fallback: sum version stats if still zero
+        try:
+            if (not downloads) or downloads == 0:
+                v_total = 0
+                for v in model_data.get('modelVersions') or []:
+                    sv = v.get('stats') or {}
+                    v_total += self._safe_get_number(sv, ('downloadCount', 'downloads'))
+                if v_total:
+                    downloads = v_total
+            if (not ratings) or ratings == 0:
+                r_total = 0
+                for v in model_data.get('modelVersions') or []:
+                    sv = v.get('stats') or {}
+                    r_total += self._safe_get_number(sv, ('ratingCount', 'ratings'))
+                if r_total:
+                    ratings = r_total
+        except Exception:
+            pass
         self.downloads_count.setText(str(downloads))
         self.ratings_count.setText(str(ratings))
         self.description.setHtml(model_data.get('description', 'No description available'))
@@ -1895,6 +2093,7 @@ class MainWindow(QMainWindow):
             
             for item in items:
                 model_name = item.get('model_name', 'Unknown')
+                model_id = str(item.get('model_id', ''))
                 version = item.get('version', 'Unknown')
                 date = item.get('download_date', 'Unknown')
                 # file_size stored in MB by DownloadManager
@@ -1902,7 +2101,7 @@ class MainWindow(QMainWindow):
                 status = item.get('status', 'Completed')
                 
                 child = QTreeWidgetItem(group_item, [
-                    model_name, version, date, size, status
+                    model_name, model_id, version, date, size, status
                 ])
         
         # Expand all groups

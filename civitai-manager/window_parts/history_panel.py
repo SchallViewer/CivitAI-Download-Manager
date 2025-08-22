@@ -46,7 +46,8 @@ class HistoryPanelBuilder:
         history_layout.addLayout(top_btns)
 
         host.history_tree = QTreeWidget()
-        host.history_tree.setHeaderLabels(["Model", "Version", "Date Downloaded", "Size", "Status"])
+        # Add Model ID column between Model and Version
+        host.history_tree.setHeaderLabels(["Model", "Model ID", "Version", "Date Downloaded", "Size", "Status"])
         host.history_tree.setStyleSheet(f"""
             QTreeWidget {{
                 background-color: {BACKGROUND_COLOR.name()};
@@ -61,10 +62,12 @@ class HistoryPanelBuilder:
                 border: none;
             }}
         """)
-        host.history_tree.setColumnWidth(0, 250)
+        host.history_tree.setColumnWidth(0, 220)
         host.history_tree.setColumnWidth(1, 100)
-        host.history_tree.setColumnWidth(2, 150)
-        host.history_tree.setColumnWidth(3, 80)
+        host.history_tree.setColumnWidth(2, 100)
+        host.history_tree.setColumnWidth(3, 150)
+        host.history_tree.setColumnWidth(4, 80)
+        host.history_tree.setColumnWidth(5, 100)
         history_layout.addWidget(host.history_tree)
 
         host.hide_failed_checkbox = QPushButton("Hide failed downloads")

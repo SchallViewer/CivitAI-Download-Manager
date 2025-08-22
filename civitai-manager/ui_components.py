@@ -104,15 +104,36 @@ class ModelCard(QFrame):
             """)
             tags_layout.addWidget(base_tag)
 
-        # Main tag (style/character)
+        # Main tag (choose by priority: meme, concept, character, style, clothing, pose)
         tags = self.model_data.get('tags') or []
         main_tag_name = 'General'
         if tags:
-            first = tags[0]
-            if isinstance(first, dict):
-                main_tag_name = first.get('name', 'General')
-            else:
-                main_tag_name = str(first)
+            # Build list of tag names preserving original casing
+            names = []
+            for t in tags:
+                if isinstance(t, dict):
+                    n = t.get('name') or ''
+                else:
+                    n = str(t or '')
+                if n:
+                    names.append(n)
+
+            # Priority list (left = higher priority)
+            priority = ['meme', 'concept', 'character', 'style', 'clothing', 'pose']
+            chosen = None
+            # map lowercased to original for case-insensitive match
+            lower_map = {n.lower(): n for n in names}
+            for p in priority:
+                if p in lower_map:
+                    chosen = lower_map[p]
+                    break
+
+            # fallback to first tag if no priority matched
+            if not chosen and names:
+                chosen = names[0]
+
+            if chosen:
+                main_tag_name = chosen
 
         tag = QLabel(main_tag_name)
         tag.setStyleSheet(f"""
