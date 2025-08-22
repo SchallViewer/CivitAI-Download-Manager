@@ -202,6 +202,13 @@ cython_debug/
 .cursorindexingignore
 *.db
 *.json
+*.png
+*.jpg
+*.jpeg
+_.py
+*.db-journal
+*.db-wal
+*.db-shm
 # Marimo
 marimo/_static/
 marimo/_lsp/

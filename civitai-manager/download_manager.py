@@ -331,7 +331,16 @@ class DownloadManager(QObject):
                 try:
                     if not self.db_manager.is_model_downloaded(model_id, version_id, file_path=file_path):
                         try:
-                            self.db_manager.record_download(task.model_data, task.version, file_path, file_size, status="Completed")
+                            self.db_manager.record_download(
+                                task.model_data,
+                                task.version,
+                                file_path,
+                                file_size,
+                                status="Completed",
+                                original_file_name=getattr(task, 'original_file_name', None),
+                                file_sha256=getattr(task, 'file_sha256', None),
+                                primary_tag=getattr(task, 'primary_tag', None)
+                            )
                         except Exception as e:
                             _append_log(f"_on_task_completed: record_download failed: {e}")
                     else:
@@ -495,7 +504,16 @@ class DownloadManager(QObject):
         try:
             if hasattr(self, 'db_manager') and task.model_data and task.version:
                 # Use normalized Failed status instead of arbitrary message
-                self.db_manager.record_download(task.model_data, task.version, task.save_path or '', 0, status="Failed")
+                self.db_manager.record_download(
+                    task.model_data,
+                    task.version,
+                    task.save_path or '',
+                    0,
+                    status="Failed",
+                    original_file_name=getattr(task, 'original_file_name', None),
+                    file_sha256=getattr(task, 'file_sha256', None),
+                    primary_tag=getattr(task, 'primary_tag', None)
+                )
         except Exception:
             pass
 

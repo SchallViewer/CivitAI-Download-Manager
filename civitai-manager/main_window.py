@@ -753,6 +753,14 @@ class MainWindow(QMainWindow):
                         self._left_agg_downloaded[key]['_images'].append(im)
 
         # create cards from aggregated entries
+        # Build map of models with any Missing entries to highlight
+        missing_map = {}
+        try:
+            if hasattr(self, 'db_manager'):
+                missing_map = self.db_manager.get_missing_status_map() or {}
+        except Exception:
+            missing_map = {}
+
         for k, md in (getattr(self, '_left_agg_downloaded', {}) or {}).items():
             card = ModelCard(md)
             card.clicked.connect(self.show_downloaded_model_details)
@@ -764,6 +772,13 @@ class MainWindow(QMainWindow):
                         card.set_image(pix)
                 except Exception:
                     pass
+            # Highlight if Missing
+            try:
+                mid = md.get('id') or md.get('model_id') or md.get('_db_id')
+                if mid in missing_map:
+                    card.setStyleSheet(card.styleSheet() + '\nModelCard { background-color: #664; border: 2px solid #ffeb3b; }')
+            except Exception:
+                pass
             self.model_cards.append(card)
 
         # place into grid
@@ -1405,11 +1420,26 @@ class MainWindow(QMainWindow):
             tags = model_data.get('tags') or []
             primary_tag = ''
             if tags:
-                first = tags[0]
-                if isinstance(first, dict):
-                    primary_tag = first.get('name', '')
-                else:
-                    primary_tag = str(first)
+                # build normalized list
+                names = []
+                for t in tags:
+                    if isinstance(t, dict):
+                        n = t.get('name') or ''
+                    else:
+                        n = str(t or '')
+                    if n:
+                        names.append(n)
+                priority = ['meme','concept','character','style','clothing','pose']
+                lower_map = {n.lower(): n for n in names}
+                chosen = None
+                for p in priority:
+                    if p in lower_map:
+                        chosen = lower_map[p]
+                        break
+                if not chosen and names:
+                    chosen = names[0]
+                primary_tag = chosen or ''
+            self._current_primary_tag = primary_tag  # store for download filename usage
             try:
                 self.model_primary_tag_label.setText(primary_tag)
                 self.model_primary_tag_label.setVisible(bool(primary_tag))
@@ -1890,11 +1920,32 @@ class MainWindow(QMainWindow):
             if not selected_files:
                 return
 
+        # Parse custom tags (comma separated)
+        custom_tags_raw = ''
+        try:
+            if hasattr(self, 'custom_tags_input'):
+                custom_tags_raw = self.custom_tags_input.text().strip()
+        except Exception:
+            pass
+        custom_tags = []
+        if custom_tags_raw:
+            for part in custom_tags_raw.split(','):
+                p = part.strip()
+                if p:
+                    custom_tags.append(p)
+
+        primary_tag = getattr(self, '_current_primary_tag', '') or ''
         # Enqueue all selected files
         any_added = False
         for f in selected_files:
             # compose safe filename from model/version
-            fname = f"{_sanitize_filename(model_name)} - {_sanitize_filename(version_name)}.safetensors"
+            base_fname = f"{_sanitize_filename(model_name)} - {_sanitize_filename(version_name)}"
+            parts = [base_fname]
+            if primary_tag:
+                parts.append(_sanitize_filename(primary_tag))
+            for ct in custom_tags:
+                parts.append(_sanitize_filename(ct))
+            fname = " - ".join(parts) + ".safetensors"
             url = f.get('downloadUrl')
             save_path = os.path.join(download_dir, fname)
 
@@ -1907,6 +1958,16 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
+            # Capture original model file name (without added tags) and SHA256 if provided
+            original_name = f.get('name') or fname
+            file_sha256 = None
+            try:
+                hashes = f.get('hashes') if isinstance(f, dict) else None
+                if isinstance(hashes, dict):
+                    file_sha256 = hashes.get('SHA256') or hashes.get('sha256')
+            except Exception:
+                pass
+
             task = DownloadTask(
                 fname,
                 url,
@@ -1915,6 +1976,10 @@ class MainWindow(QMainWindow):
                 model_data=self.current_model,
                 version=self.current_version
             )
+            # attach extra metadata for db recording after completion
+            task.original_file_name = original_name
+            task.file_sha256 = file_sha256
+            task.primary_tag = primary_tag
             try:
                 self.download_manager.add_download(task)
                 any_added = True
@@ -2106,6 +2171,23 @@ class MainWindow(QMainWindow):
         
         # Expand all groups
         self.history_tree.expandAll()
+
+    def refresh_download_history_status(self):
+        # Update statuses for missing/restored files then reload view
+        counts = {"missing":0, "restored":0}
+        try:
+            download_dir = self.settings_manager.get("download_dir") or ''
+            counts = self.db_manager.update_file_statuses(download_dir)
+        except Exception:
+            pass
+        self.load_download_history()
+        try:
+            self.status_bar.showMessage(
+                f"History refreshed. Missing: {counts.get('missing',0)} Restored(existing): {counts.get('restored',0)} Renamed restored: {counts.get('renamed_restored',0)} (hashed {counts.get('hashed_files',0)}/{counts.get('scanned_files',0)} files)",
+                8000
+            )
+        except Exception:
+            pass
     
     def export_history(self):
         file_path, _ = QFileDialog.getSaveFileName(

@@ -345,6 +345,26 @@ class DetailsPanelBuilder:
         host.download_btn.clicked.connect(host.download_selected_version)
         version_layout.addWidget(host.download_btn)
 
+        # Custom download tags input
+        from PyQt5.QtWidgets import QLineEdit
+        host.custom_tags_input = QLineEdit()
+        host.custom_tags_input.setPlaceholderText("Add custom tags (comma separated) to append to filename")
+        host.custom_tags_input.setStyleSheet(
+            f"""
+            QLineEdit {{
+                background-color: {BACKGROUND_COLOR.name()};
+                color: {TEXT_COLOR.name()};
+                border: 1px solid #444;
+                border-radius: 4px;
+                padding: 6px;
+            }}
+            QLineEdit:focus {{
+                border: 1px solid {PRIMARY_COLOR.name()};
+            }}
+            """
+        )
+        version_layout.addWidget(host.custom_tags_input)
+
         details_layout.addWidget(version_group)
 
         # Description group

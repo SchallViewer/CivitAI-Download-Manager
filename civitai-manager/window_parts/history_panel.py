@@ -124,22 +124,23 @@ class HistoryPanelBuilder:
         host.import_btn.clicked.connect(host.import_history)
         btn_layout.addWidget(host.import_btn)
 
-        host.clear_btn = QPushButton("Clear History")
-        host.clear_btn.setFont(QFont("Segoe UI", 10))
-        host.clear_btn.setStyleSheet(f"""
+        # Refresh button to re-scan file existence / status
+        host.refresh_history_btn = QPushButton("Refresh")
+        host.refresh_history_btn.setFont(QFont("Segoe UI", 10))
+        host.refresh_history_btn.setStyleSheet(f"""
             QPushButton {{
-                background-color: #b00020;
-                color: white;
+                background-color: #333;
+                color: #ddd;
                 padding: 8px;
                 border-radius: 4px;
                 font-weight: bold;
             }}
             QPushButton:hover {{
-                background-color: #c00030;
+                background-color: #444;
             }}
         """)
-        host.clear_btn.clicked.connect(host.clear_history)
-        btn_layout.addWidget(host.clear_btn)
+        host.refresh_history_btn.clicked.connect(host.refresh_download_history_status)
+        btn_layout.addWidget(host.refresh_history_btn)
 
         history_layout.addLayout(btn_layout)
         host.right_panel.addWidget(host.history_panel)
