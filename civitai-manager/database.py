@@ -320,7 +320,7 @@ class DatabaseManager:
                 FROM downloads d
                 JOIN models m ON m.model_id = d.model_id
                 JOIN versions v ON v.version_id = d.version_id
-                WHERE d.status = 'Completed'
+                WHERE d.status IN ('Completed','Imported','Missing')
                 ORDER BY d.download_date DESC
             ''')
             rows = cursor.fetchall()
@@ -353,18 +353,42 @@ class DatabaseManager:
         if not model_data or not version:
             return False
         # Normalize status to a known set to avoid CHECK constraint failures on older DBs
-        allowed = ("Queued", "Downloading", "Completed", "Failed")
+        allowed = ("Queued", "Downloading", "Completed", "Failed", "Imported", "Missing")
         if status not in allowed:
-            # map common error-style statuses to Failed
             status = "Failed"
         try:
             cursor = self.conn.cursor()
-            cursor.execute('''
-            INSERT INTO downloads (
+            # Upgrade path: if an Imported (or Missing without path) row exists for this model/version, update it instead of inserting
+            try:
+                cursor.execute('''SELECT id, status, file_sha256, file_path FROM downloads WHERE model_id=? AND version_id=? ORDER BY download_date DESC LIMIT 1''', (
+                    model_data.get('id'), version.get('id')))
+                existing = cursor.fetchone()
+            except sqlite3.Error:
+                existing = None
+            if existing:
+                ex_id, ex_status, ex_sha, ex_path = existing
+                if ex_status in ('Imported','Missing') and (not ex_path):
+                    # Treat this as fulfillment of the imported placeholder
+                    cursor.execute('''UPDATE downloads SET 
+                        model_name=?, model_type=?, version=?, main_tag=?, original_file_name=?, file_path=?, file_size=?, status=?, file_sha256=?, restored=1
+                        WHERE id=?''', (
+                        model_data.get('name','Unknown'),
+                        model_data.get('type','Unknown'),
+                        version.get('name','Unknown'),
+                        primary_tag or (model_data.get('tags', ['Other'])[0] if model_data.get('tags') else 'Other'),
+                        original_file_name,
+                        file_path,
+                        file_size,
+                        'Completed',  # finalize
+                        file_sha256,
+                        ex_id
+                    ))
+                    self.conn.commit()
+                    return True
+            cursor.execute('''INSERT INTO downloads (
                 model_id, model_name, model_type, version, version_id, main_tag,
                 download_date, original_file_name, file_path, file_size, status, file_sha256
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''', (
                 model_data.get('id'),
                 model_data.get('name', 'Unknown'),
                 model_data.get('type', 'Unknown'),
@@ -405,26 +429,169 @@ class DatabaseManager:
         try:
             cursor = self.conn.cursor()
             for item in history:
-                cursor.execute('''
-                INSERT INTO downloads (
-                    model_id, model_name, model_type, version, version_id, main_tag,
-                    download_date, original_file_name, file_path, file_size, status, file_sha256, restored
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (
-                    item.get('model_id'),
-                    item.get('model_name'),
-                    item.get('model_type'),
-                    item.get('version'),
-                    item.get('version_id'),
-                    item.get('main_tag'),
-                    item.get('download_date'),
-                    item.get('original_file_name'),
-                    item.get('file_path'),
-                    item.get('file_size'),
-                    item.get('status', 'Completed'),
-                    item.get('file_sha256'),
-                    item.get('restored', 0)
-                ))
+                # optional enriched metadata handling
+                try:
+                    model_id = item.get('model_id')
+                    model_meta = item.get('model_metadata') or item.get('model_meta')
+                    if model_id and model_meta:
+                        # upsert model
+                        cursor.execute('''
+                            INSERT INTO models (model_id, name, type, base_model, creator, url, description, tags, published_at, updated_at, metadata)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            ON CONFLICT(model_id) DO UPDATE SET
+                                name=excluded.name,
+                                type=excluded.type,
+                                base_model=excluded.base_model,
+                                creator=excluded.creator,
+                                url=excluded.url,
+                                description=excluded.description,
+                                tags=excluded.tags,
+                                published_at=excluded.published_at,
+                                updated_at=excluded.updated_at,
+                                metadata=excluded.metadata
+                        ''', (
+                            model_id,
+                            model_meta.get('name'),
+                            model_meta.get('type'),
+                            model_meta.get('baseModel') or model_meta.get('base_model'),
+                            (model_meta.get('creator') or {}).get('username') if isinstance(model_meta.get('creator'), dict) else str(model_meta.get('creator') or ''),
+                            model_meta.get('url') or f"https://civitai.com/models/{model_id}",
+                            model_meta.get('description'),
+                            json.dumps(model_meta.get('tags') or []),
+                            model_meta.get('publishedAt') or model_meta.get('createdAt') or model_meta.get('published_at'),
+                            model_meta.get('updatedAt') or model_meta.get('updated_at'),
+                            json.dumps(model_meta)
+                        ))
+                except Exception:
+                    pass
+                try:
+                    version_id = item.get('version_id')
+                    version_meta = item.get('version_metadata') or item.get('version_meta')
+                    if version_id and version_meta:
+                        cursor.execute('''
+                            INSERT INTO versions (version_id, model_id, name, base_model, published_at, updated_at, trained_words, metadata)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                            ON CONFLICT(version_id) DO UPDATE SET
+                                model_id=excluded.model_id,
+                                name=excluded.name,
+                                base_model=excluded.base_model,
+                                published_at=excluded.published_at,
+                                updated_at=excluded.updated_at,
+                                trained_words=excluded.trained_words,
+                                metadata=excluded.metadata
+                        ''', (
+                            version_id,
+                            item.get('model_id'),
+                            version_meta.get('name'),
+                            version_meta.get('baseModel') or version_meta.get('base_model'),
+                            version_meta.get('publishedAt') or version_meta.get('createdAt') or version_meta.get('published_at'),
+                            version_meta.get('updatedAt') or version_meta.get('updated_at'),
+                            json.dumps(version_meta.get('trainedWords') or []),
+                            json.dumps(version_meta)
+                        ))
+                except Exception:
+                    pass
+                # Minimal fallback: create model/version rows if not already present and metadata missing but basic fields exist
+                try:
+                    mid = item.get('model_id')
+                    if mid and not (item.get('model_metadata') or item.get('model_meta')):
+                        cursor.execute('SELECT 1 FROM models WHERE model_id=? LIMIT 1', (mid,))
+                        if cursor.fetchone() is None:
+                            cursor.execute('''INSERT INTO models (model_id, name, type, base_model, creator, url, description, tags, published_at, updated_at, metadata)
+                                              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''', (
+                                mid,
+                                item.get('model_name'),
+                                item.get('model_type'),
+                                item.get('base_model'),
+                                '',
+                                item.get('url') or (f"https://civitai.com/models/{mid}" if mid else None),
+                                None,
+                                json.dumps(item.get('tags') or []),
+                                item.get('published_at'),
+                                item.get('updated_at'),
+                                json.dumps({})
+                            ))
+                except Exception:
+                    pass
+                try:
+                    vid = item.get('version_id')
+                    if vid and not (item.get('version_metadata') or item.get('version_meta')):
+                        cursor.execute('SELECT 1 FROM versions WHERE version_id=? LIMIT 1', (vid,))
+                        if cursor.fetchone() is None:
+                            cursor.execute('''INSERT INTO versions (version_id, model_id, name, base_model, published_at, updated_at, trained_words, metadata)
+                                              VALUES (?, ?, ?, ?, ?, ?, ?, ?)''', (
+                                vid,
+                                item.get('model_id'),
+                                item.get('version'),
+                                item.get('base_model'),
+                                item.get('version_published_at'),
+                                item.get('version_updated_at'),
+                                json.dumps(item.get('trained_words') or []),
+                                json.dumps({})
+                            ))
+                except Exception:
+                    pass
+                # optional images list
+                try:
+                    imgs = item.get('images') or []
+                    if imgs and item.get('model_id'):
+                        for lp in imgs:
+                            try:
+                                cursor.execute('''INSERT INTO images (model_id, version_id, url, local_path, position, is_gif) VALUES (?, ?, ?, ?, ?, ?)''', (
+                                    item.get('model_id'),
+                                    item.get('version_id'),
+                                    None,
+                                    lp,
+                                    0,
+                                    1 if str(lp).lower().endswith('.gif') else 0
+                                ))
+                            except Exception:
+                                continue
+                except Exception:
+                    pass
+                # Dedupe & status normalization
+                try:
+                    incoming_status = item.get('status', 'Completed')
+                    if not item.get('file_path') and incoming_status == 'Completed':
+                        incoming_status = 'Imported'
+                    incoming_sha = item.get('file_sha256') or None
+                    existing = None
+                    cursor.execute('''SELECT id, status, file_sha256 FROM downloads WHERE model_id=? AND version_id=? ORDER BY download_date DESC LIMIT 1''', (
+                        item.get('model_id'), item.get('version_id')))
+                    existing = cursor.fetchone()
+                    if existing:
+                        ex_id, ex_status, ex_sha = existing
+                        # duplicate if hash matches or both hashes empty
+                        if (incoming_sha and incoming_sha == ex_sha) or (not incoming_sha and not ex_sha):
+                            # upgrade existing if we now have a Completed with a file path
+                            if ex_status in ('Imported','Missing') and incoming_status == 'Completed' and item.get('file_path'):
+                                cursor.execute('UPDATE downloads SET status=?, file_path=?, file_size=?, file_sha256=?, restored=? WHERE id=?', (
+                                    'Completed', item.get('file_path'), item.get('file_size'), incoming_sha, item.get('restored',0), ex_id))
+                            continue
+                        if ex_status == 'Completed' and incoming_status in ('Imported','Missing'):
+                            continue
+                    cursor.execute('''
+                        INSERT INTO downloads (
+                            model_id, model_name, model_type, version, version_id, main_tag,
+                            download_date, original_file_name, file_path, file_size, status, file_sha256, restored
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (
+                        item.get('model_id'),
+                        item.get('model_name'),
+                        item.get('model_type'),
+                        item.get('version'),
+                        item.get('version_id'),
+                        item.get('main_tag'),
+                        item.get('download_date'),
+                        item.get('original_file_name'),
+                        item.get('file_path'),
+                        item.get('file_size'),
+                        incoming_status,
+                        item.get('file_sha256'),
+                        item.get('restored', 0)
+                    ))
+                except Exception:
+                    pass
             self.conn.commit()
             return True
         except sqlite3.Error as e:
@@ -463,16 +630,23 @@ class DatabaseManager:
                 for idx, (did, fpath, status, sha) in enumerate(rows):
                     print(f"[refresh] Row {idx+1}/{len(rows)} id={did} status={status} path={fpath} sha={(sha or '')[:12]}")
                     exists = bool(fpath and os.path.exists(fpath))
-                    if not exists and status not in ('Queued','Downloading','Failed','Missing'):
-                        print(f"[refresh] -> Mark Missing (not found)")
+                    # Only mark Missing if a previously Completed download disappeared.
+                    if not exists and status == 'Completed':
+                        print(f"[refresh] -> Mark Missing (Completed file not found)")
                         cursor.execute('UPDATE downloads SET status = ?, restored = 0 WHERE id = ?', ('Missing', did))
                         counts['missing'] += 1
                         if sha:
                             missing_sha_targets[sha.lower()] = did
                     elif status == 'Missing' and exists:
-                        print(f"[refresh] -> Mark Restored (path exists again)")
+                        print(f"[refresh] -> Mark Restored (Missing file found again)")
                         cursor.execute('UPDATE downloads SET status = ?, restored = 1 WHERE id = ?', ('Completed', did))
                         counts['restored'] += 1
+                    elif status == 'Imported':
+                        # Imported entries have no local file yet; don't downgrade to Missing.
+                        if exists:
+                            # edge case: user manually added a file at recorded path later (rare if file_path was None)
+                            print(f"[refresh] -> Upgrade Imported to Completed (file now exists)")
+                            cursor.execute('UPDATE downloads SET status = ?, restored = 1 WHERE id = ?', ('Completed', did))
                     elif status == 'Missing' and not exists and sha:
                         print(f"[refresh] -> Candidate for renamed search (has SHA-256)")
                         missing_sha_targets[sha.lower()] = did
@@ -538,6 +712,150 @@ class DatabaseManager:
                 for mid, status in cur.fetchall():
                     if status == 'Missing':
                         out[mid] = True
+        except Exception:
+            pass
+        return out
+
+    def get_full_download_export(self):
+        """Return enriched list of downloads with model/version metadata and local images.
+        This enables reconstruction of downloaded explorer cards and details panel offline."""
+        results = []
+        try:
+            with self._lock:
+                cur = self.conn.cursor()
+                cur.execute('''
+                SELECT d.id, d.model_id, d.model_name, d.model_type, d.version, d.version_id, d.main_tag,
+                       d.download_date, d.original_file_name, d.file_path, d.file_size, d.status, d.file_sha256, d.restored,
+                       m.metadata AS model_metadata, v.metadata AS version_metadata
+                FROM downloads d
+                LEFT JOIN models m ON m.model_id = d.model_id
+                LEFT JOIN versions v ON v.version_id = d.version_id
+                ORDER BY d.download_date DESC
+                ''')
+                rows = cur.fetchall()
+                for r in rows:
+                    (row_id, model_id, model_name, model_type, version_name, version_id, main_tag,
+                     download_date, original_file_name, file_path, file_size, status, file_sha256, restored,
+                     model_meta_json, version_meta_json) = r
+                    try:
+                        model_meta = json.loads(model_meta_json) if model_meta_json else {}
+                    except Exception:
+                        model_meta = {}
+                    try:
+                        version_meta = json.loads(version_meta_json) if version_meta_json else {}
+                    except Exception:
+                        version_meta = {}
+                    # collect local images (model scope)
+                    cur2 = self.conn.cursor()
+                    cur2.execute('SELECT local_path FROM images WHERE model_id = ? AND local_path IS NOT NULL ORDER BY position ASC LIMIT 10', (model_id,))
+                    imgs = [rr[0] for rr in cur2.fetchall() if rr and rr[0]]
+                    results.append({
+                        'id': row_id,
+                        'model_id': model_id,
+                        'model_name': model_name,
+                        'model_type': model_type,
+                        'version': version_name,
+                        'version_id': version_id,
+                        'main_tag': main_tag,
+                        'download_date': download_date,
+                        'original_file_name': original_file_name,
+                        'file_path': file_path,
+                        'file_size': file_size,
+                        'status': status,
+                        'file_sha256': file_sha256,
+                        'restored': restored,
+                        'model_metadata': model_meta,
+                        'version_metadata': version_meta,
+                        'images': imgs,
+                    })
+        except Exception as e:
+            print('Error building full export:', e)
+        return results
+
+    def get_minimal_download_export(self):
+        """Return minimal list with only fields needed to reconstruct basic cards/history.
+        Excludes local file paths and image paths to keep it portable and privacy-safe."""
+        minimal = []
+        try:
+            with self._lock:
+                cur = self.conn.cursor()
+                cur.execute('''
+                SELECT d.model_id, d.model_name, d.model_type, d.version, d.version_id, d.main_tag,
+                       d.download_date, d.original_file_name, d.file_size, d.status, d.file_sha256, d.restored,
+                       m.base_model, m.url, m.tags, m.published_at, m.updated_at,
+                       v.published_at AS version_published_at, v.updated_at AS version_updated_at, v.trained_words
+                FROM downloads d
+                LEFT JOIN models m ON m.model_id = d.model_id
+                LEFT JOIN versions v ON v.version_id = d.version_id
+                ORDER BY d.download_date DESC
+                ''')
+                rows = cur.fetchall()
+                for (model_id, model_name, model_type, version_name, version_id, main_tag,
+                     download_date, original_file_name, file_size, status, file_sha256, restored,
+                     base_model, url, tags_json, published_at, updated_at, version_published_at, version_updated_at, trained_words_json) in rows:
+                    try:
+                        tags = json.loads(tags_json) if tags_json else []
+                    except Exception:
+                        tags = []
+                    try:
+                        trained_words = json.loads(trained_words_json) if trained_words_json else []
+                    except Exception:
+                        trained_words = []
+                    minimal.append({
+                        'model_id': model_id,
+                        'model_name': model_name,
+                        'model_type': model_type,
+                        'version': version_name,
+                        'version_id': version_id,
+                        'main_tag': main_tag,
+                        'download_date': download_date,
+                        'original_file_name': original_file_name,
+                        'file_size': file_size,
+                        'status': status,
+                        'file_sha256': file_sha256,
+                        'restored': restored,
+                        'base_model': base_model,
+                        'url': url or (f"https://civitai.com/models/{model_id}" if model_id else None),
+                        'tags': tags[:25],  # cap for size
+                        'published_at': published_at,
+                        'updated_at': updated_at,
+                        'version_published_at': version_published_at,
+                        'version_updated_at': version_updated_at,
+                        'trained_words': trained_words,
+                    })
+        except Exception as e:
+            print('Error building minimal export:', e)
+        return minimal
+
+    def get_model_versions(self, model_id):
+        """Return list of versions for a given model with essential metadata (offline reconstruction)."""
+        out = []
+        try:
+            with self._lock:
+                cur = self.conn.cursor()
+                cur.execute('''SELECT version_id, name, base_model, published_at, updated_at, trained_words, metadata FROM versions WHERE model_id=? ORDER BY published_at DESC, name ASC''', (model_id,))
+                rows = cur.fetchall()
+                for (vid, name, base_model, pub, upd, trained_words_json, meta_json) in rows:
+                    try:
+                        trained_words = json.loads(trained_words_json) if trained_words_json else []
+                    except Exception:
+                        trained_words = []
+                    try:
+                        meta = json.loads(meta_json) if meta_json else {}
+                    except Exception:
+                        meta = {}
+                    v = {
+                        'id': vid,
+                        'name': name,
+                        'baseModel': base_model,
+                        'publishedAt': pub,
+                        'updatedAt': upd,
+                        'trainedWords': trained_words,
+                    }
+                    for k, val in meta.items():
+                        if k not in v:
+                            v[k] = val
+                    out.append(v)
         except Exception:
             pass
         return out

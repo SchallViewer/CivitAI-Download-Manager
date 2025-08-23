@@ -28,4 +28,3 @@ ACCENT_COLOR = QColor("#ff4081")  # Pink accent
 
 API_BASE_URL = "https://civitai.com/api/v1"
 MAX_CONCURRENT_DOWNLOADS = 3
-POPULAR_PERIOD = "Week"  # Default to weekly popular models

@@ -435,9 +435,10 @@ class DownloadManager(QObject):
 
                         model_name = task.model_data.get('name', 'model')
                         model_id = task.model_data.get('id')
-                        base_dir = os.path.dirname(file_path)
+                        # Use fixed workspace 'images' folder under current working directory
+                        images_root = os.path.join(os.getcwd(), 'images')
                         model_dir_name = f"{_sanitize(model_name)}_{model_id}"
-                        images_dir = os.path.join(base_dir, model_dir_name, "images")
+                        images_dir = os.path.join(images_root, model_dir_name)
                         os.makedirs(images_dir, exist_ok=True)
 
                         for i, url in enumerate(imgs[:5]):

@@ -1,7 +1,8 @@
 # settings_dialog.py
 from PyQt5.QtWidgets import (
-    QDialog, QVBoxLayout, QFormLayout, QLineEdit, QPushButton, 
-    QFileDialog, QDialogButtonBox, QHBoxLayout, QLabel,QComboBox
+    QDialog, QVBoxLayout, QFormLayout, QLineEdit, QPushButton,
+    QFileDialog, QDialogButtonBox, QHBoxLayout, QLabel, QComboBox,
+    QListWidget, QListWidgetItem, QWidget, QAbstractItemView
 )
 from PyQt5.QtGui import QIcon,QFont
 from settings import SettingsManager
@@ -14,7 +15,13 @@ class SettingsDialog(QDialog):
         self.settings_manager = settings_manager
         self.setWindowTitle("Settings")
         self.setWindowIcon(QIcon("icons/settings.png"))
-        self.setFixedSize(500, 400)
+        # Make dialog larger and resizable to accommodate new sections
+        try:
+            self.setMinimumSize(560, 650)
+            self.resize(640, 760)
+        except Exception:
+            # fallback fixed size if resize APIs fail
+            self.setFixedSize(640, 760)
         self.setStyleSheet(f"""
             QDialog {{
                 background-color: {BACKGROUND_COLOR.name()};
@@ -59,25 +66,7 @@ class SettingsDialog(QDialog):
 
         self.api_key_input.setText(api_key or "")
 
-        # Popular period
-        self.period_combo = QComboBox()
-        self.period_combo.addItem("Weekly Popular", "Week")
-        self.period_combo.addItem("Monthly Popular", "Month")
-        self.period_combo.setStyleSheet(f"""
-            QComboBox {{
-                background-color: #2a2a2a;
-                color: {TEXT_COLOR.name()};
-                border: 1px solid {PRIMARY_COLOR.name()};
-                border-radius: 4px;
-                padding: 8px;
-            }}
-        """)
-        current_period = self.settings_manager.get("popular_period", "Week")
-        index = self.period_combo.findData(current_period or "week")
-        if index >= 0:
-            self.period_combo.setCurrentIndex(index)
-
-        api_layout.addRow("Popular Models Period:", self.period_combo)
+    # Removed obsolete popular period setting (handled directly in explorer filters)
         layout.addLayout(api_layout)
         
         # Download Configuration section
@@ -123,6 +112,41 @@ class SettingsDialog(QDialog):
         download_layout.addRow("Download Folder:", download_dir_layout)
         layout.addLayout(download_layout)
         
+        # Tag Priority section
+        tag_section = QLabel("Filename Tag Priority")
+        tag_section.setFont(QFont("Segoe UI", 12, QFont.Bold))
+        tag_section.setStyleSheet(f"color: {PRIMARY_COLOR.name()}; margin-top: 20px; margin-bottom: 10px;")
+        layout.addWidget(tag_section)
+
+        tag_layout = QVBoxLayout()
+        self.priority_list = QListWidget()
+        self.priority_list.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.priority_list.setDragEnabled(True)
+        self.priority_list.setDragDropMode(QAbstractItemView.InternalMove)
+        self.priority_list.setStyleSheet("QListWidget { background:#2a2a2a; border:1px solid #444; } QListWidget::item { padding:4px; }")
+        # populate from settings
+        pri_raw = self.settings_manager.get("priority_tags", "") or ""
+        for tag in [t.strip() for t in pri_raw.split(',') if t.strip()]:
+            self.priority_list.addItem(QListWidgetItem(tag))
+        btn_row = QHBoxLayout()
+        self.add_tag_input = QLineEdit()
+        self.add_tag_input.setPlaceholderText("Add tag")
+        add_btn = QPushButton("Add")
+        add_btn.clicked.connect(self.add_priority_tag)
+        rem_btn = QPushButton("Remove Selected")
+        rem_btn.clicked.connect(self.remove_priority_tag)
+        for b in (add_btn, rem_btn):
+            b.setStyleSheet(f"QPushButton {{ background-color: {PRIMARY_COLOR.name()}; color:white; border-radius:4px; padding:4px 10px;}}")
+        btn_row.addWidget(self.add_tag_input)
+        btn_row.addWidget(add_btn)
+        btn_row.addWidget(rem_btn)
+        tag_layout.addWidget(QLabel("Drag to reorder. First match is used for primary tag in filenames."))
+        tag_layout.addWidget(self.priority_list)
+        tag_layout.addLayout(btn_row)
+        layout.addLayout(tag_layout)
+
+    # Images folder is fixed to workspace 'images' and not editable by user
+
         # History Management section
         history_section = QLabel("History Management")
         history_section.setFont(QFont("Segoe UI", 12, QFont.Bold))
@@ -184,6 +208,15 @@ class SettingsDialog(QDialog):
         )
         if directory:
             self.download_dir_input.setText(directory)
+
+    def browse_images_directory(self):
+        directory = QFileDialog.getExistingDirectory(
+            self, "Select Images Directory",
+            self.images_dir_input.text()
+        )
+        if directory:
+            self.images_dir_input.setText(directory)
+        
     
     def export_history(self):
         # Implementation to export history
@@ -196,5 +229,31 @@ class SettingsDialog(QDialog):
     def save_settings(self):
         self.settings_manager.set("api_key", self.api_key_input.text())
         self.settings_manager.set("download_dir", self.download_dir_input.text())
-        self.settings_manager.set("popular_period", self.period_combo.currentData())
+    # popular period removed
+        # priority tags
+        tags = []
+        for i in range(self.priority_list.count()):
+            t = self.priority_list.item(i).text().strip()
+            if t and t not in tags:
+                tags.append(t)
+        self.settings_manager.set("priority_tags", ",".join(tags))
+    # images folder is fixed to workspace/images; no user setting
         self.accept()
+
+    def add_priority_tag(self):
+        txt = self.add_tag_input.text().strip()
+        if not txt:
+            return
+        # avoid duplicates
+        existing = [self.priority_list.item(i).text() for i in range(self.priority_list.count())]
+        if txt in existing:
+            self.add_tag_input.clear()
+            return
+        self.priority_list.addItem(QListWidgetItem(txt))
+        self.add_tag_input.clear()
+
+    def remove_priority_tag(self):
+        row = self.priority_list.currentRow()
+        if row >= 0:
+            it = self.priority_list.takeItem(row)
+            del it

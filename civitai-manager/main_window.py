@@ -38,7 +38,7 @@ from settings import SettingsManager
 from settings_dialog import SettingsDialog
 from constants import (
     PRIMARY_COLOR, SECONDARY_COLOR, BACKGROUND_COLOR, CARD_BACKGROUND,
-    TEXT_COLOR, SECONDARY_TEXT, ACCENT_COLOR, POPULAR_PERIOD, API_BASE_URL
+    TEXT_COLOR, SECONDARY_TEXT, ACCENT_COLOR, API_BASE_URL
 )
 from window_parts.details_panel import DetailsPanelBuilder
 from window_parts.downloads_panel import DownloadsPanelBuilder
@@ -681,6 +681,11 @@ class MainWindow(QMainWindow):
             if key not in agg:
                 # clone metadata and attach versions list
                 md = dict(model_data)
+                try:
+                    if model_id and 'modelVersions' not in md and hasattr(self, 'db_manager'):
+                        md['modelVersions'] = self.db_manager.get_model_versions(model_id)
+                except Exception:
+                    pass
                 md['_db_id'] = item.get('id')
                 md['_downloaded_versions'] = [item.get('version_id')] if item.get('version_id') else []
                 md['_images'] = item.get('images') or []
@@ -741,6 +746,12 @@ class MainWindow(QMainWindow):
             key = f"m_{model_id}" if model_id is not None else f"db_{item.get('id')}"
             if key not in self._left_agg_downloaded:
                 md = dict(model_data)
+                # attach versions list for offline/imported entries
+                try:
+                    if model_id and 'modelVersions' not in md and hasattr(self, 'db_manager'):
+                        md['modelVersions'] = self.db_manager.get_model_versions(model_id)
+                except Exception:
+                    pass
                 md['_db_id'] = item.get('id')
                 md['_downloaded_versions'] = [item.get('version_id')] if item.get('version_id') else []
                 md['_images'] = item.get('images') or []
@@ -886,12 +897,9 @@ class MainWindow(QMainWindow):
             if not self.api_key:
                 self.show_api_key_warning()
                 return
-            
-            # Determine period from settings
-            period = self.settings_manager.get("popular_period", POPULAR_PERIOD)
-            
-            # Fetch popular models
-            popular_models = self.api.get_popular_models(period=period)
+
+            # Fetch popular models (default server period now handled by API or UI filters)
+            popular_models = self.api.get_popular_models()
             
             # Clear existing models
             self.clear_model_grid()
@@ -1429,7 +1437,17 @@ class MainWindow(QMainWindow):
                         n = str(t or '')
                     if n:
                         names.append(n)
-                priority = ['meme','concept','character','style','clothing','pose']
+                # Fetch user-configured priority tags from settings (comma separated)
+                try:
+                    if hasattr(self, 'settings_manager'):
+                        pri_raw = self.settings_manager.get('priority_tags', '') or ''
+                        priority = [p.strip().lower() for p in pri_raw.split(',') if p.strip()]
+                        if not priority:
+                            priority = ['meme','concept','character','style','clothing','pose']
+                    else:
+                        priority = ['meme','concept','character','style','clothing','pose']
+                except Exception:
+                    priority = ['meme','concept','character','style','clothing','pose']
                 lower_map = {n.lower(): n for n in names}
                 chosen = None
                 for p in priority:
@@ -2194,7 +2212,11 @@ class MainWindow(QMainWindow):
             self, "Export History", "", "JSON Files (*.json)"
         )
         if file_path:
-            history = self.db_manager.get_download_history()
+            # Use minimal portable export (no local paths/images)
+            try:
+                history = self.db_manager.get_minimal_download_export()
+            except Exception:
+                history = self.db_manager.get_download_history()
             try:
                 with open(file_path, 'w') as f:
                     json.dump(history, f, indent=2)
