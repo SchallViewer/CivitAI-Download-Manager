@@ -462,12 +462,16 @@ class MainWindow(QMainWindow):
         self.addToolBar(toolbar)
 
         # Navigation actions
-        self.search_action = QAction(QIcon("icons/search.png"), "Search", self)
-        self.downloads_action = QAction(QIcon("icons/downloads.png"), "Downloads", self)
-        self.history_action = QAction(QIcon("icons/history.png"), "History", self)
+        # Get the directory where this script is located
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        icons_dir = os.path.join(script_dir, "icons")
+        
+        self.search_action = QAction(QIcon(os.path.join(icons_dir, "search.png")), "Search", self)
+        self.downloads_action = QAction(QIcon(os.path.join(icons_dir, "downloads.png")), "Downloads", self)
+        self.history_action = QAction(QIcon(os.path.join(icons_dir, "history.png")), "History", self)
         # note: file name is 'setting.png' in icons folder
-        self.settings_action = QAction(QIcon("icons/setting.png"), "Settings", self)
-        self.downloaded_explorer_action = QAction(QIcon("icons/donwloads_explorer.png"), "Downloaded Explorer", self)
+        self.settings_action = QAction(QIcon(os.path.join(icons_dir, "setting.png")), "Settings", self)
+        self.downloaded_explorer_action = QAction(QIcon(os.path.join(icons_dir, "donwloads_explorer.png")), "Downloaded Explorer", self)
         self.downloaded_explorer_action.setToolTip("Switch to Downloaded Model Explorer")
 
         toolbar.addAction(self.search_action)
