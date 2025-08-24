@@ -209,6 +209,7 @@ _.py
 *.db-journal
 *.db-wal
 *.db-shm
+images/*
 # Marimo
 marimo/_static/
 marimo/_lsp/

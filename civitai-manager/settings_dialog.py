@@ -61,12 +61,23 @@ class SettingsDialog(QDialog):
                 padding: 8px;
             }}
         """)
-        api_layout.addRow("API Key:", self.api_key_input)
-        
+        # Add input and clear button in a horizontal layout
+        key_row = QHBoxLayout()
+        key_row.addWidget(self.api_key_input)
+        clear_btn = QPushButton("Clear API Key")
+        clear_btn.setStyleSheet(f"QPushButton {{ background-color: #8b0000; color: white; padding:6px; border-radius:4px;}}")
+        clear_btn.clicked.connect(self.clear_api_key)
+        key_row.addWidget(clear_btn)
+        api_layout.addRow("API Key:", key_row)
 
         self.api_key_input.setText(api_key or "")
+        # Inform user where the API key is stored
+        info_label = QLabel("Note: API key is stored securely in the Windows registry; exported JSON will NOT contain the key.")
+        info_label.setWordWrap(True)
+        info_label.setStyleSheet("color: #aaaaaa; font-size: 11px;")
+        api_layout.addRow(info_label)
 
-    # Removed obsolete popular period setting (handled directly in explorer filters)
+        # Removed obsolete popular period setting (handled directly in explorer filters)
         layout.addLayout(api_layout)
         
         # Download Configuration section
@@ -239,6 +250,14 @@ class SettingsDialog(QDialog):
         self.settings_manager.set("priority_tags", ",".join(tags))
     # images folder is fixed to workspace/images; no user setting
         self.accept()
+
+    def clear_api_key(self):
+        """Clear the API key from registry and the input field."""
+        try:
+            self.settings_manager.delete_api_key()
+        except Exception:
+            pass
+        self.api_key_input.clear()
 
     def add_priority_tag(self):
         txt = self.add_tag_input.text().strip()

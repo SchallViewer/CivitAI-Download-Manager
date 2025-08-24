@@ -238,6 +238,37 @@ class DetailsPanelBuilder:
         host.open_browser_btn.clicked.connect(host.open_model_in_browser)
         info_layout.addWidget(host.open_browser_btn)
 
+        # Delete version button (visible only in Downloaded Explorer context)
+        host.delete_version_btn = QPushButton("Delete Selected Version")
+        host.delete_version_btn.setFont(QFont("Segoe UI", 9, QFont.Bold))
+        host.delete_version_btn.setToolTip("Delete the currently selected model version (keeps history as 'Deleted')")
+        host.delete_version_btn.setStyleSheet(
+            """
+            QPushButton {
+                background-color: #8b0000; /* dark red */
+                color: white;
+                padding: 6px;
+                border-radius: 4px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #b71c1c;
+            }
+            QPushButton:disabled {
+                background-color: #552222;
+                color: #999;
+            }
+            """
+        )
+        host.delete_version_btn.setFixedHeight(32)
+        host.delete_version_btn.setEnabled(False)
+        host.delete_version_btn.setVisible(False)
+        try:
+            host.delete_version_btn.clicked.connect(host.delete_selected_version)
+        except Exception:
+            pass
+        info_layout.addWidget(host.delete_version_btn)
+
         header_layout.addWidget(info_container, stretch=0)
         header_layout.addStretch()
         details_layout.addLayout(header_layout)

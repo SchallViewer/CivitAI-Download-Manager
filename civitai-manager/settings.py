@@ -106,6 +106,17 @@ class SettingsManager:
         self.settings.sync()
         self._write_external_config()
 
+    def delete_api_key(self) -> None:
+        """Remove the api_key from QSettings (registry) and persist changes."""
+        try:
+            # remove will delete the key from the registry-backed QSettings
+            self.settings.remove('api_key')
+            self.settings.sync()
+            # ensure external JSON remains without secrets
+            self._write_external_config()
+        except Exception:
+            pass
+
     # --- External JSON config helpers ---
     def _load_external_config(self):
         try:
@@ -116,12 +127,12 @@ class SettingsManager:
                 # Map legacy keys if needed
                 key_map = {
                     'download_folder': 'download_dir',
-                    'api_key': 'api_key',
                     'priority_tags': 'priority_tags'
                 }
                 for legacy, new_key in key_map.items():
                     if legacy in data and data[legacy] is not None:
                         self.settings.setValue(new_key, data[legacy])
+                # Do NOT load api_key from external JSON for security reasons.
         except Exception:
             pass
 
@@ -131,6 +142,9 @@ class SettingsManager:
             # gather all known settings
             out = {}
             for key in self.defaults.keys():
+                # Skip api_key — we never write secrets to the JSON file
+                if key == 'api_key':
+                    continue
                 # external file uses 'download_folder' historically
                 if key == 'download_dir':
                     out['download_folder'] = self.get(key)
@@ -138,6 +152,8 @@ class SettingsManager:
                     out[key] = self.get(key)
             # ensure priority_tags present even if empty
             out.setdefault('priority_tags', self.defaults['priority_tags'])
+            # record the registry path where secrets (api_key) are stored
+            out['registry_path'] = r"HKCU\\Software\\CivitaiManager\\DownloadManager"
             with open(path, 'w', encoding='utf-8') as f:
                 json.dump(out, f, indent=2)
         except Exception:

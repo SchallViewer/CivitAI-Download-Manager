@@ -1,4 +1,4 @@
-# main_window.py
+# main_window.py - Main application window (refactored)
 import os
 import re
 import sys
@@ -44,8 +44,10 @@ from window_parts.details_panel import DetailsPanelBuilder
 from window_parts.downloads_panel import DownloadsPanelBuilder
 from window_parts.history_panel import HistoryPanelBuilder
 from window_parts.downloaded_explorer_panel import DownloadedExplorerBuilder
-
-## Moved ImageLoaderThread and FileSelectionDialog to ui_helpers.py
+from window_parts.model_utils import ModelDataUtils
+from window_parts.search_manager import SearchManager
+from window_parts.downloaded_manager import DownloadedManager
+from window_parts.download_handler import DownloadHandler
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -69,6 +71,12 @@ class MainWindow(QMainWindow):
         palette.setColor(QPalette.Highlight, PRIMARY_COLOR)
         palette.setColor(QPalette.HighlightedText, TEXT_COLOR)
         self.setPalette(palette)
+        
+        # Initialize managers and utilities
+        self.utils = ModelDataUtils()
+        self.search_manager = SearchManager(self)
+        self.downloaded_manager = DownloadedManager(self)
+        self.download_handler = DownloadHandler(self)
         
         # Initialize modules
         self.settings_manager = SettingsManager()
@@ -398,94 +406,20 @@ class MainWindow(QMainWindow):
         self.right_panel.setCurrentIndex(3)
 
     def _extract_image_url(self, model):
-        """Return the best available image URL from a model dict or None."""
-        if not model or not isinstance(model, dict):
-            return None
-
-        # Common field used elsewhere
-        if model.get('firstImageUrl'):
-            return model.get('firstImageUrl')
-
-        if model.get('imageUrl'):
-            return model.get('imageUrl')
-
-        # images can be list of dicts or strings - prefer static images and skip videos
-        def is_video_url(u):
-            if not u or not isinstance(u, str):
-                return False
-            low = u.lower()
-            for ext in ('.mp4', '.webm', '.mov', '.mkv', '.avi'):
-                if low.endswith(ext) or ext in low:
-                    return True
-            return False
-
-        images = model.get('images') or []
-        if images:
-            for first in images:
-                if isinstance(first, dict):
-                    url = first.get('url') or first.get('thumbnail')
-                else:
-                    url = first if isinstance(first, str) else None
-                if url and not is_video_url(url):
-                    return url
-
-        # try modelVersions -> images
-        versions = model.get('modelVersions') or model.get('versions') or []
-        if versions and isinstance(versions[0], dict):
-            vimgs = versions[0].get('images') or []
-            for fv in vimgs:
-                if isinstance(fv, dict):
-                    url = fv.get('url') or fv.get('thumbnail')
-                else:
-                    url = fv if isinstance(fv, str) else None
-                if url and not is_video_url(url):
-                    return url
-
-        return None
+        """Delegate to utility class."""
+        return self.utils.extract_image_url(model)
 
     def _matches_base_model(self, model, base_model):
-        """Return True if model or any of its versions declare the given base_model."""
-        try:
-            if not base_model:
-                return True
-            bm = model.get('baseModel') or model.get('base_model')
-            if isinstance(bm, str) and bm.lower() == str(base_model).lower():
-                return True
-            versions = model.get('modelVersions') or model.get('versions') or []
-            for v in versions:
-                if not isinstance(v, dict):
-                    continue
-                vb = v.get('baseModel') or v.get('base_model')
-                if isinstance(vb, str) and vb.lower() == str(base_model).lower():
-                    return True
-        except Exception:
-            pass
-        return False
+        """Delegate to utility class.""" 
+        return self.utils.matches_base_model(model, base_model)
 
     def _safe_get_number(self, d, keys, default=0):
-        """Return first numeric-like value found in dict d for any key in keys."""
-        if not d or not isinstance(d, dict):
-            return default
-        for k in keys:
-            v = d.get(k)
-            if isinstance(v, (int, float)):
-                return v
-            try:
-                if v is not None:
-                    return int(v)
-            except Exception:
-                continue
-        return default
+        """Delegate to utility class."""
+        return self.utils.safe_get_number(d, keys, default)
 
     def _extract_date(self, d, keys):
-        """Return first non-empty ISO-like date string for keys or empty string."""
-        if not d or not isinstance(d, dict):
-            return ''
-        for k in keys:
-            v = d.get(k)
-            if isinstance(v, str) and v:
-                return v
-        return ''
+        """Delegate to utility class."""
+        return self.utils.extract_date(d, keys)
     
     def create_toolbar(self):
         toolbar = QToolBar("Main Toolbar")
@@ -505,7 +439,6 @@ class MainWindow(QMainWindow):
         self.history_action = QAction(QIcon("icons/history.png"), "History", self)
         # note: file name is 'setting.png' in icons folder
         self.settings_action = QAction(QIcon("icons/setting.png"), "Settings", self)
-        # use the available image name 'donwloads_explorer.png' (typo in file name kept)
         self.downloaded_explorer_action = QAction(QIcon("icons/donwloads_explorer.png"), "Downloaded Explorer", self)
         self.downloaded_explorer_action.setToolTip("Switch to Downloaded Model Explorer")
 
@@ -953,6 +886,31 @@ class MainWindow(QMainWindow):
             self.version_list.clear()
             self.trigger_words.clear()
             self.model_image.clear()
+    
+    # Delegate methods to managers
+    def show_downloaded_explorer(self):
+        """Delegate to downloaded manager."""
+        self.downloaded_manager.show_downloaded_explorer()
+    
+    def load_downloaded_models(self):
+        """Delegate to downloaded manager."""
+        self.downloaded_manager.load_downloaded_models()
+    
+    def load_downloaded_models_left(self):
+        """Delegate to downloaded manager."""
+        self.downloaded_manager.load_downloaded_models_left()
+    
+    def show_downloaded_model_details(self, model_data):
+        """Delegate to downloaded manager."""
+        self.downloaded_manager.show_downloaded_model_details(model_data)
+    
+    def download_selected_version(self):
+        """Delegate to download handler."""
+        self.download_handler.download_selected_version()
+    
+    def delete_selected_version(self):
+        """Delegate to download handler."""
+        self.download_handler.delete_selected_version()
     
     def search_models(self):
         if not self.api_key:
@@ -1762,6 +1720,26 @@ class MainWindow(QMainWindow):
         if selected_items:
             version = selected_items[0].data(Qt.UserRole)
             self.current_version = version
+            # Manage delete button visibility & enabled state: only in downloaded explorer and if version downloaded
+            try:
+                if getattr(self, 'delete_version_btn', None):
+                    in_downloaded = getattr(self, 'current_left_view', 'search') == 'downloaded'
+                    self.delete_version_btn.setVisible(in_downloaded)
+                    if in_downloaded and self.current_model:
+                        mid = self.current_model.get('id') or self.current_model.get('model_id')
+                        vid = version.get('id') or version.get('version_id')
+                        # Only enable if a download record exists for this version
+                        is_downloaded = False
+                        try:
+                            if mid and vid and hasattr(self, 'db_manager'):
+                                is_downloaded = self.db_manager.has_download_record(mid, vid)
+                        except Exception:
+                            is_downloaded = False
+                        self.delete_version_btn.setEnabled(is_downloaded)
+                    else:
+                        self.delete_version_btn.setEnabled(False)
+            except Exception:
+                pass
             
             # Show trigger words
             trigger_words = version.get('trainedWords', [])
@@ -1879,31 +1857,39 @@ class MainWindow(QMainWindow):
     
     def download_selected_version(self):
         if not self.current_version or not self.current_model:
+            print("DEBUG: No current version or model")
             return
-            
+        # Must be in search (or not in downloaded) view to allow new downloads
+        try:
+            if getattr(self, 'current_left_view', 'search') != 'search':
+                # If user is in downloaded explorer, hide download
+                print("DEBUG: Not in search view")
+                return
+        except Exception:
+            pass
+
+        print("DEBUG: Starting download process")
+        
         # Get download directory
         download_dir = self.settings_manager.get("download_dir")
         if not os.path.exists(download_dir):
-            os.makedirs(download_dir)
-        
-        # Create download task
+            try:
+                os.makedirs(download_dir)
+            except Exception:
+                print("DEBUG: Could not create download directory")
+                return
+
         model_name = self.current_model.get('name', 'model')
         version_name = self.current_version.get('name', 'version')
 
         def _sanitize_filename(s: str) -> str:
-            # Remove characters not allowed on Windows filenames and control chars
             if not isinstance(s, str):
                 s = str(s or '')
-            # replace invalid characters with underscore
             s = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', s)
-            # collapse multiple spaces and trim
             s = re.sub(r'\s+', ' ', s).strip()
-            # avoid names that end with dot or space
             s = s.rstrip('. ')
-            # limit length to reasonable size
             return s[:200]
 
-        # Build list of version files
         files_list = [f for f in (self.current_version.get('files') or []) if isinstance(f, dict) and f.get('type') == 'Model']
         safetensors = [f for f in files_list if (f.get('name') or '').lower().endswith('.safetensors')]
         pickles = [f for f in files_list if (f.get('name') or '').lower().endswith('.pt') or (f.get('name') or '').lower().endswith('.pth')]
@@ -1925,20 +1911,16 @@ class MainWindow(QMainWindow):
                 )
                 return
         else:
-            # Show selection dialog; hides .pt/.pth when .safetensors exist
             dlg = FileSelectionDialog(self, files_list)
             if dlg.exec_() == QDialog.Accepted:
                 selected_files = dlg.get_selected_files()
             else:
                 return
-            # If any safetensors selected, drop any .pt/.pth
             if any((f.get('name') or '').lower().endswith('.safetensors') for f in selected_files):
                 selected_files = [f for f in selected_files if (f.get('name') or '').lower().endswith('.safetensors')]
-
             if not selected_files:
                 return
 
-        # Parse custom tags (comma separated)
         custom_tags_raw = ''
         try:
             if hasattr(self, 'custom_tags_input'):
@@ -1953,10 +1935,8 @@ class MainWindow(QMainWindow):
                     custom_tags.append(p)
 
         primary_tag = getattr(self, '_current_primary_tag', '') or ''
-        # Enqueue all selected files
         any_added = False
         for f in selected_files:
-            # compose safe filename from model/version
             base_fname = f"{_sanitize_filename(model_name)} - {_sanitize_filename(version_name)}"
             parts = [base_fname]
             if primary_tag:
@@ -1966,8 +1946,6 @@ class MainWindow(QMainWindow):
             fname = " - ".join(parts) + ".safetensors"
             url = f.get('downloadUrl')
             save_path = os.path.join(download_dir, fname)
-
-            # Prevent duplicate download for this model/version and file path
             try:
                 model_id = self.current_model.get('id')
                 version_id = self.current_version.get('id')
@@ -1975,8 +1953,6 @@ class MainWindow(QMainWindow):
                     continue
             except Exception:
                 pass
-
-            # Capture original model file name (without added tags) and SHA256 if provided
             original_name = f.get('name') or fname
             file_sha256 = None
             try:
@@ -1985,7 +1961,6 @@ class MainWindow(QMainWindow):
                     file_sha256 = hashes.get('SHA256') or hashes.get('sha256')
             except Exception:
                 pass
-
             task = DownloadTask(
                 fname,
                 url,
@@ -1994,7 +1969,6 @@ class MainWindow(QMainWindow):
                 model_data=self.current_model,
                 version=self.current_version
             )
-            # attach extra metadata for db recording after completion
             task.original_file_name = original_name
             task.file_sha256 = file_sha256
             task.primary_tag = primary_tag
@@ -2003,10 +1977,105 @@ class MainWindow(QMainWindow):
                 any_added = True
             except Exception:
                 pass
-
         if any_added:
-            # Do not redirect to downloads; keep user on details
-            self.status_bar.showMessage("Added selected file(s) to download queue")
+            self.status_bar.showMessage("Added selected file(s) to download queue", 6000)
+
+    def delete_selected_version(self):
+        """Delete the currently selected model version (files + metadata) while preserving history as 'Deleted'."""
+        try:
+            # Only allow deletion inside Downloaded Explorer context
+            if getattr(self, 'current_left_view', 'search') != 'downloaded':
+                return
+            if not self.current_model or not self.current_version:
+                return
+            model_id = self.current_model.get('id') or self.current_model.get('model_id')
+            version_id = self.current_version.get('id') or self.current_version.get('version_id')
+            if not model_id or not version_id:
+                return
+            # Verify version has an actual download record (avoid deleting not-downloaded versions)
+            try:
+                if not self.db_manager.has_download_record(model_id, version_id):
+                    # silently ignore (button should have been disabled)
+                    return
+            except Exception:
+                return
+            # Confirm with user
+            from PyQt5.QtWidgets import QMessageBox
+            ret = QMessageBox.question(
+                self,
+                "Confirm Delete",
+                f"Delete version '{self.current_version.get('name','Unknown')}' of model '{self.current_model.get('name','Unknown')}'?\n\nThis will:\n - Remove the model file from disk (if present)\n - Remove version & model DB metadata (model removed if last version)\n - Mark history entries as 'Deleted' (not removed).",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            if ret != QMessageBox.Yes:
+                return
+            summary = self.db_manager.delete_model_version(model_id, version_id)
+            # Refresh UI: remove version from list, maybe clear model if gone
+            # Reload versions for current model
+            remaining = self.db_manager.get_model_versions(model_id)
+            if not remaining:
+                # Clear details panel since model removed
+                self.version_list.clear()
+                self.delete_version_btn.setEnabled(False)
+                self.download_btn.setEnabled(False)
+                self.trigger_words.clear()
+                try:
+                    self.model_name.setText("Model deleted")
+                except Exception:
+                    pass
+                # Also remove its card from downloaded explorer grid and reload
+                try:
+                    if getattr(self, 'current_left_view', 'search') == 'downloaded':
+                        # rebuild aggregation dict then redraw left models
+                        if hasattr(self, '_left_agg_downloaded'):
+                            try:
+                                del self._left_agg_downloaded
+                            except Exception:
+                                pass
+                        self.load_downloaded_models_left()
+                except Exception:
+                    pass
+            else:
+                # repopulate version list
+                self.version_list.clear()
+                for v in remaining:
+                    from PyQt5.QtWidgets import QListWidgetItem
+                    item = QListWidgetItem(v.get('name','Unnamed'))
+                    item.setData(Qt.UserRole, v)
+                    self.version_list.addItem(item)
+                self.delete_version_btn.setEnabled(False)
+                self.download_btn.setEnabled(False)
+                self.trigger_words.clear()
+                # refresh card if still exists
+                try:
+                    if getattr(self, 'current_left_view', 'search') == 'downloaded':
+                        if hasattr(self, '_left_agg_downloaded'):
+                            try:
+                                del self._left_agg_downloaded
+                            except Exception:
+                                pass
+                        self.load_downloaded_models_left()
+                except Exception:
+                    pass
+            # Update history panel to reflect status changes
+            try:
+                self.load_download_history()
+            except Exception:
+                pass
+            # Status bar feedback
+            try:
+                self.status_bar.showMessage(
+                    f"Deleted version {version_id} (files: {summary.get('deleted_files')}, images: {summary.get('deleted_image_files')})",
+                    7000
+                )
+            except Exception:
+                pass
+        except Exception as e:
+            try:
+                self.status_bar.showMessage(f"Error deleting version: {e}", 7000)
+            except Exception:
+                pass
     
     def show_search_panel(self):
         # switch back to search left view

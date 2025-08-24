@@ -859,3 +859,95 @@ class DatabaseManager:
         except Exception:
             pass
         return out
+
+    def delete_model_version(self, model_id: int, version_id: int):
+        """Delete a specific model version:
+        - Remove related file on disk if path recorded (ignore errors)
+        - Remove related local preview images for that version
+        - Mark corresponding downloads history rows status='Deleted' (keep history)
+        - Delete rows from versions, files, images referencing that version
+        - If model has no remaining versions, delete model row and any model-level images
+        Returns dict summary.
+        """
+        summary = {"deleted_files": 0, "deleted_image_files": 0, "history_marked": 0, "version_rows": 0, "model_deleted": False}
+        with self._lock:
+            try:
+                cur = self.conn.cursor()
+                # Collect file paths for this version from downloads table (status Completed/Imported/Missing)
+                cur.execute('SELECT id, file_path, status FROM downloads WHERE model_id=? AND version_id=?', (model_id, version_id))
+                drows = cur.fetchall()
+                for (did, fpath, status) in drows:
+                    # only transition active statuses to Deleted (avoid re-marking)
+                    if status in ('Completed','Imported','Missing'):
+                        try:
+                            cur.execute('UPDATE downloads SET status=? WHERE id=?', ('Deleted', did))
+                            summary['history_marked'] += 1
+                        except Exception:
+                            pass
+                    if fpath and os.path.exists(fpath):
+                        try:
+                            os.remove(fpath)
+                            summary['deleted_files'] += 1
+                        except Exception:
+                            pass
+                # Collect and remove version-level images (local files)
+                try:
+                    cur.execute('SELECT local_path FROM images WHERE version_id=? AND local_path IS NOT NULL', (version_id,))
+                    img_rows = cur.fetchall()
+                    for (ipath,) in img_rows:
+                        if ipath and os.path.exists(ipath):
+                            try:
+                                os.remove(ipath)
+                                summary['deleted_image_files'] += 1
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+                # Remove version related tables
+                try:
+                    cur.execute('DELETE FROM files WHERE version_id=?', (version_id,))
+                except Exception:
+                    pass
+                try:
+                    cur.execute('DELETE FROM images WHERE version_id=?', (version_id,))
+                except Exception:
+                    pass
+                cur.execute('DELETE FROM versions WHERE version_id=?', (version_id,))
+                summary['version_rows'] = cur.rowcount
+                # Check remaining versions for model
+                cur.execute('SELECT 1 FROM versions WHERE model_id=? LIMIT 1', (model_id,))
+                if cur.fetchone() is None:
+                    # delete model + any model-scope images
+                    try:
+                        # remove model-level images (collect local files first)
+                        try:
+                            cur.execute('SELECT local_path FROM images WHERE model_id=? AND local_path IS NOT NULL', (model_id,))
+                            mimg_rows = cur.fetchall()
+                            for (mpath,) in mimg_rows:
+                                if mpath and os.path.exists(mpath):
+                                    try:
+                                        os.remove(mpath)
+                                        summary['deleted_image_files'] += 1
+                                    except Exception:
+                                        pass
+                        except Exception:
+                            pass
+                        cur.execute('DELETE FROM images WHERE model_id=?', (model_id,))
+                    except Exception:
+                        pass
+                    cur.execute('DELETE FROM models WHERE model_id=?', (model_id,))
+                    summary['model_deleted'] = cur.rowcount > 0
+                self.conn.commit()
+            except Exception as e:
+                print('Error deleting model version:', e)
+        return summary
+
+    def has_download_record(self, model_id: int, version_id: int) -> bool:
+        """Return True if there is a downloads row indicating the version was downloaded/imported/missing."""
+        try:
+            with self._lock:
+                cur = self.conn.cursor()
+                cur.execute("SELECT 1 FROM downloads WHERE model_id=? AND version_id=? AND status IN ('Completed','Imported','Missing') LIMIT 1", (model_id, version_id))
+                return cur.fetchone() is not None
+        except Exception:
+            return False
