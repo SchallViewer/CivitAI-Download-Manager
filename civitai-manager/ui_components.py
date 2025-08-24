@@ -184,9 +184,10 @@ class ModelCard(QFrame):
 
 class DownloadProgressWidget(QWidget):
     cancel_requested = pyqtSignal(str)
-    def __init__(self, task, parent=None):
+    def __init__(self, task, download_manager=None, parent=None):
         super().__init__(parent)
         self.task = task
+        self.download_manager = download_manager
         self.init_ui()
         self.connect_signals()
     
@@ -248,6 +249,15 @@ class DownloadProgressWidget(QWidget):
         self.task.signals.progress.connect(self.update_progress)
         self.task.signals.completed.connect(self.download_completed)
         self.task.signals.error.connect(self.download_error)
+        
+        # Connect to download manager phase signals if available
+        if self.download_manager:
+            try:
+                self.download_manager.download_file_completed.connect(self.file_download_completed)
+                self.download_manager.download_gathering_images.connect(self.gathering_images)
+                self.download_manager.download_fully_completed.connect(self.fully_completed)
+            except Exception:
+                pass
     
     def update_progress(self, file_name, received, total):
         if file_name == self.task.file_name:
@@ -259,7 +269,24 @@ class DownloadProgressWidget(QWidget):
     
     def download_completed(self, file_name, file_path, file_size):
         if file_name == self.task.file_name:
+            # Don't mark as completed yet - wait for post-processing
+            self.status_label.setText("File downloaded - Gathering images...")
+            self.progress_bar.setValue(100)
+            
+    def file_download_completed(self, file_name):
+        if file_name == self.task.file_name:
+            self.status_label.setText("File downloaded - Gathering images...")
+            self.progress_bar.setValue(100)
+            
+    def gathering_images(self, file_name):
+        if file_name == self.task.file_name:
+            self.status_label.setText("Gathering images...")
+            self.progress_bar.setRange(0, 0)  # Indeterminate progress
+            
+    def fully_completed(self, file_name):
+        if file_name == self.task.file_name:
             self.status_label.setText("Completed")
+            self.progress_bar.setRange(0, 100)  # Back to normal range
             self.progress_bar.setValue(100)
             self.cancel_button.setVisible(False)
     

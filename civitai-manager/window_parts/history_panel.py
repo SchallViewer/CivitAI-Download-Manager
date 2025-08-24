@@ -70,7 +70,7 @@ class HistoryPanelBuilder:
         host.history_tree.setColumnWidth(5, 100)
         history_layout.addWidget(host.history_tree)
 
-        host.hide_failed_checkbox = QPushButton("Hide failed downloads")
+        host.hide_failed_checkbox = QPushButton("Hide failed/deleted downloads")
         host.hide_failed_checkbox.setCheckable(True)
         host.hide_failed_checkbox.setChecked(True)
         host.hide_failed_checkbox.setStyleSheet(f"""

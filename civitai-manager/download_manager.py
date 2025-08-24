@@ -112,6 +112,178 @@ class DownloadSignals(QObject):
     completed = pyqtSignal(str, str, float)  # file_name, file_path, file_size
     error = pyqtSignal(str, str)  # file_name, error_message
 
+class PostProcessSignals(QObject):
+    finished = pyqtSignal(str)  # file_name when post-processing is done
+    error = pyqtSignal(str, str)  # file_name, error_message
+
+class PostProcessTask(QRunnable):
+    def __init__(self, db_manager, model_data, version, file_path, file_size, task_metadata):
+        super().__init__()
+        self.db_manager = db_manager
+        self.model_data = model_data
+        self.version = version
+        self.file_path = file_path
+        self.file_size = file_size
+        self.task_metadata = task_metadata
+        self.signals = PostProcessSignals()
+        
+    def run(self):
+        try:
+            file_name = self.task_metadata.get('file_name', 'unknown')
+            _append_log(f"PostProcessTask.run: starting post-processing for '{file_name}'")
+            
+            # Record download to database if metadata available
+            if hasattr(self, 'db_manager') and self.model_data and self.version and self.file_path:
+                # file_size is passed in MB
+                try:
+                    # If DB already knows this model+version and the file exists, avoid duplicate entries
+                    model_id = self.model_data.get('id')
+                    version_id = self.version.get('id')
+                    try:
+                        if not self.db_manager.is_model_downloaded(model_id, version_id, file_path=self.file_path):
+                            try:
+                                self.db_manager.record_download(
+                                    self.model_data,
+                                    self.version,
+                                    self.file_path,
+                                    self.file_size,
+                                    status="Completed",
+                                    original_file_name=self.task_metadata.get('original_file_name'),
+                                    file_sha256=self.task_metadata.get('file_sha256'),
+                                    primary_tag=self.task_metadata.get('primary_tag')
+                                )
+                            except Exception as e:
+                                _append_log(f"PostProcessTask.run: record_download failed: {e}")
+                        else:
+                            _append_log(f"PostProcessTask.run: skipping record_download, already present for {model_id}/{version_id}")
+                    except Exception as e:
+                        _append_log(f"PostProcessTask.run: is_model_downloaded check failed: {e}")
+
+                    # Upsert model/version and files into normalized tables (including model URL)
+                    try:
+                        # Save main file row
+                        try:
+                            file_entry = None
+                            for f in (self.version.get('files') or []):
+                                if f.get('type') == 'Model' and f.get('name', '').endswith('.safetensors'):
+                                    file_entry = f
+                                    break
+                            if file_entry:
+                                cur = self.db_manager.conn.cursor()
+                                cur.execute('''
+                                    INSERT INTO files (version_id, name, type, size, download_url, format, sha256, path)
+                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                                ''', (
+                                    version_id,
+                                    file_entry.get('name'),
+                                    file_entry.get('type'),
+                                    float(file_entry.get('sizeKB', 0)) * 1024.0 if isinstance(file_entry.get('sizeKB'), (int, float)) else None,
+                                    file_entry.get('downloadUrl'),
+                                    file_entry.get('format'),
+                                    file_entry.get('hashes', {}).get('SHA256') if isinstance(file_entry.get('hashes'), dict) else None,
+                                    self.file_path
+                                ))
+                                self.db_manager.conn.commit()
+                        except Exception as e:
+                            _append_log(f"PostProcessTask.run: files insert failed: {e}")
+                    except Exception:
+                        pass
+
+                    # Save preview images (up to 5) for THIS VERSION under a per-model folder
+                    try:
+                        imgs = []
+                        seen = set()
+
+                        def _is_video(u: str) -> bool:
+                            if not u or not isinstance(u, str):
+                                return False
+                            low = u.lower()
+                            for ext in ('.mp4', '.webm', '.mov', '.mkv', '.avi'):
+                                if low.endswith(ext) or ext in low:
+                                    return True
+                            return False
+
+                        def add_url(u):
+                            if not u or not isinstance(u, str) or _is_video(u):
+                                return
+                            if u in seen:
+                                return
+                            seen.add(u)
+                            imgs.append(u)
+
+                        # Prefer images from the exact version being downloaded
+                        for img in (self.version.get('images') or []):
+                            if isinstance(img, dict):
+                                add_url(img.get('url') or img.get('thumbnail'))
+                            else:
+                                add_url(str(img))
+                            if len(imgs) >= 5:
+                                break
+
+                        # Fallback to model-level gallery only if version has no images
+                        if not imgs:
+                            for key in ('images', 'gallery', 'modelImages'):
+                                for img in (self.model_data.get(key) or []):
+                                    if isinstance(img, dict):
+                                        add_url(img.get('url') or img.get('thumbnail'))
+                                    else:
+                                        add_url(str(img))
+                                    if len(imgs) >= 5:
+                                        break
+                                if len(imgs) >= 5:
+                                    break
+
+                        # Compute per-model images directory under the model's download directory
+                        saved_paths = []
+                        if imgs:
+                            def _sanitize(s: str) -> str:
+                                import re as _re
+                                if not isinstance(s, str):
+                                    s = str(s or '')
+                                s = _re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', s)
+                                s = _re.sub(r'\s+', ' ', s).strip().rstrip('. ')
+                                return s[:150]
+
+                            model_name = self.model_data.get('name', 'model')
+                            model_id = self.model_data.get('id')
+                            # Use fixed workspace 'images' folder under current working directory
+                            images_root = os.path.join(os.getcwd(), 'images')
+                            model_dir_name = f"{_sanitize(model_name)}_{model_id}"
+                            images_dir = os.path.join(images_root, model_dir_name)
+                            os.makedirs(images_dir, exist_ok=True)
+
+                            for i, url in enumerate(imgs[:5]):
+                                try:
+                                    r = requests.get(url, timeout=20)
+                                    if r.status_code == 200:
+                                        ext = os.path.splitext(url.split('?')[0])[1] or '.jpg'
+                                        img_path = os.path.join(images_dir, f"v{version_id}_img_{i+1}{ext}")
+                                        # Resize (<=1.1MP), strip metadata, and save
+                                        _process_and_write_image_bytes(r.content, img_path, ext)
+                                        saved_paths.append(img_path)
+                                except Exception:
+                                    continue
+
+                        # Persist full metadata and saved image paths (upsert)
+                        try:
+                            if hasattr(self, 'db_manager'):
+                                # save_downloaded_model will upsert existing entries
+                                self.db_manager.save_downloaded_model(self.model_data, self.version, image_paths=saved_paths)
+                        except Exception as e:
+                            _append_log(f"PostProcessTask.run: save_downloaded_model failed: {e}")
+                    except Exception as e:
+                        _append_log(f"PostProcessTask.run: image saving failed: {e}")
+                except Exception as e:
+                    _append_log(f"PostProcessTask.run: unexpected error: {e}")
+                    
+            _append_log(f"PostProcessTask.run: completed post-processing for '{file_name}'")
+            self.signals.finished.emit(file_name)
+            
+        except Exception as e:
+            file_name = self.task_metadata.get('file_name', 'unknown')
+            _append_log(f"PostProcessTask.run: failed post-processing for '{file_name}': {e}")
+            self.signals.error.emit(file_name, str(e))
+
 class DownloadTask(QRunnable):
     def __init__(self, file_name, url, save_path, api_key=None, model_data=None, version=None):
         super().__init__()
@@ -163,6 +335,9 @@ class DownloadManager(QObject):
     downloads_changed = pyqtSignal()
     download_started = pyqtSignal(str)  # file_name
     download_queued = pyqtSignal(str)   # file_name
+    download_file_completed = pyqtSignal(str)  # file_name - model file downloaded
+    download_gathering_images = pyqtSignal(str)  # file_name - gathering images
+    download_fully_completed = pyqtSignal(str)  # file_name - everything done
 
     def __init__(self, db_manager):
         super().__init__()
@@ -172,6 +347,7 @@ class DownloadManager(QObject):
         self.active_downloads = []
         self.queued_downloads = []
         self.download_tasks = {}
+        self.download_status = {}  # Track download phases: 'downloading', 'gathering_images', 'completed'
     
     def add_download(self, task):
         print(f"DownloadManager.add_download: received task '{task.file_name}'")
@@ -221,6 +397,7 @@ class DownloadManager(QObject):
                     pass
                 self.thread_pool.start(task)
                 self.download_tasks[task.file_name] = task
+                self.download_status[task.file_name] = 'downloading'  # Track initial status
                 try:
                     self.download_started.emit(task.file_name)
                 except Exception:
@@ -254,6 +431,10 @@ class DownloadManager(QObject):
     
     def get_queued_downloads(self):
         return self.queued_downloads
+        
+    def get_download_status(self, file_name):
+        """Get current status of a download: 'downloading', 'gathering_images', 'completed', or None"""
+        return self.download_status.get(file_name)
     
     def cancel_download(self, file_name):
         if file_name in self.download_tasks:
@@ -279,6 +460,13 @@ class DownloadManager(QObject):
                     del self.download_tasks[file_name]
             except Exception:
                 pass
+                
+            # Clean up status tracking
+            try:
+                if file_name in self.download_status:
+                    del self.download_status[file_name]
+            except Exception:
+                pass
             
             # Start next download if available
             if self.queued_downloads:
@@ -290,6 +478,8 @@ class DownloadManager(QObject):
                     except Exception:
                         pass
                     self.thread_pool.start(next_task)
+                    # Set status for new task
+                    self.download_status[next_task.file_name] = 'downloading'
                     # ensure mapping is updated so dedupe checks remain accurate
                     try:
                         self.download_tasks[next_task.file_name] = next_task
@@ -310,6 +500,15 @@ class DownloadManager(QObject):
                 pass
 
     def _on_task_completed(self, task, file_name, file_path, file_size):
+        # Update status to indicate file download completed but post-processing starting
+        self.download_status[file_name] = 'gathering_images'
+        
+        # Emit signal that file download is complete
+        try:
+            self.download_file_completed.emit(file_name)
+        except Exception:
+            pass
+            
         # Remove finished task from active list and mapping
         try:
             if task in self.active_downloads:
@@ -321,151 +520,8 @@ class DownloadManager(QObject):
                 del self.download_tasks[task.file_name]
         except Exception:
             pass
-        # Record download to database if metadata available
-        if hasattr(self, 'db_manager') and task.model_data and task.version and file_path:
-            # file_size is passed in MB
-            try:
-                # If DB already knows this model+version and the file exists, avoid duplicate entries
-                model_id = task.model_data.get('id')
-                version_id = task.version.get('id')
-                try:
-                    if not self.db_manager.is_model_downloaded(model_id, version_id, file_path=file_path):
-                        try:
-                            self.db_manager.record_download(
-                                task.model_data,
-                                task.version,
-                                file_path,
-                                file_size,
-                                status="Completed",
-                                original_file_name=getattr(task, 'original_file_name', None),
-                                file_sha256=getattr(task, 'file_sha256', None),
-                                primary_tag=getattr(task, 'primary_tag', None)
-                            )
-                        except Exception as e:
-                            _append_log(f"_on_task_completed: record_download failed: {e}")
-                    else:
-                        _append_log(f"_on_task_completed: skipping record_download, already present for {model_id}/{version_id}")
-                except Exception as e:
-                    _append_log(f"_on_task_completed: is_model_downloaded check failed: {e}")
-
-                # Upsert model/version and files into normalized tables (including model URL)
-                try:
-                    # Save main file row
-                    try:
-                        file_entry = None
-                        for f in (task.version.get('files') or []):
-                            if f.get('type') == 'Model' and f.get('name', '').endswith('.safetensors'):
-                                file_entry = f
-                                break
-                        if file_entry:
-                            cur = self.db_manager.conn.cursor()
-                            cur.execute('''
-                                INSERT INTO files (version_id, name, type, size, download_url, format, sha256, path)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                            ''', (
-                                version_id,
-                                file_entry.get('name'),
-                                file_entry.get('type'),
-                                float(file_entry.get('sizeKB', 0)) * 1024.0 if isinstance(file_entry.get('sizeKB'), (int, float)) else None,
-                                file_entry.get('downloadUrl'),
-                                file_entry.get('format'),
-                                file_entry.get('hashes', {}).get('SHA256') if isinstance(file_entry.get('hashes'), dict) else None,
-                                file_path
-                            ))
-                            self.db_manager.conn.commit()
-                    except Exception as e:
-                        _append_log(f"_on_task_completed: files insert failed: {e}")
-                except Exception:
-                    pass
-
-                # Save preview images (up to 5) for THIS VERSION under a per-model folder
-                try:
-                    imgs = []
-                    seen = set()
-
-                    def _is_video(u: str) -> bool:
-                        if not u or not isinstance(u, str):
-                            return False
-                        low = u.lower()
-                        for ext in ('.mp4', '.webm', '.mov', '.mkv', '.avi'):
-                            if low.endswith(ext) or ext in low:
-                                return True
-                        return False
-
-                    def add_url(u):
-                        if not u or not isinstance(u, str) or _is_video(u):
-                            return
-                        if u in seen:
-                            return
-                        seen.add(u)
-                        imgs.append(u)
-
-                    # Prefer images from the exact version being downloaded
-                    for img in (task.version.get('images') or []):
-                        if isinstance(img, dict):
-                            add_url(img.get('url') or img.get('thumbnail'))
-                        else:
-                            add_url(str(img))
-                        if len(imgs) >= 5:
-                            break
-
-                    # Fallback to model-level gallery only if version has no images
-                    if not imgs:
-                        for key in ('images', 'gallery', 'modelImages'):
-                            for img in (task.model_data.get(key) or []):
-                                if isinstance(img, dict):
-                                    add_url(img.get('url') or img.get('thumbnail'))
-                                else:
-                                    add_url(str(img))
-                                if len(imgs) >= 5:
-                                    break
-                            if len(imgs) >= 5:
-                                break
-
-                    # Compute per-model images directory under the model's download directory
-                    saved_paths = []
-                    if imgs:
-                        def _sanitize(s: str) -> str:
-                            import re as _re
-                            if not isinstance(s, str):
-                                s = str(s or '')
-                            s = _re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', s)
-                            s = _re.sub(r'\s+', ' ', s).strip().rstrip('. ')
-                            return s[:150]
-
-                        model_name = task.model_data.get('name', 'model')
-                        model_id = task.model_data.get('id')
-                        # Use fixed workspace 'images' folder under current working directory
-                        images_root = os.path.join(os.getcwd(), 'images')
-                        model_dir_name = f"{_sanitize(model_name)}_{model_id}"
-                        images_dir = os.path.join(images_root, model_dir_name)
-                        os.makedirs(images_dir, exist_ok=True)
-
-                        for i, url in enumerate(imgs[:5]):
-                            try:
-                                r = requests.get(url, timeout=20)
-                                if r.status_code == 200:
-                                    ext = os.path.splitext(url.split('?')[0])[1] or '.jpg'
-                                    img_path = os.path.join(images_dir, f"v{version_id}_img_{i+1}{ext}")
-                                    # Resize (<=1.1MP), strip metadata, and save
-                                    _process_and_write_image_bytes(r.content, img_path, ext)
-                                    saved_paths.append(img_path)
-                            except Exception:
-                                continue
-
-                    # Persist full metadata and saved image paths (upsert)
-                    try:
-                        if hasattr(self, 'db_manager'):
-                            # save_downloaded_model will upsert existing entries
-                            self.db_manager.save_downloaded_model(task.model_data, task.version, image_paths=saved_paths)
-                    except Exception as e:
-                        _append_log(f"_on_task_completed: save_downloaded_model failed: {e}")
-                except Exception as e:
-                    _append_log(f"_on_task_completed: image saving failed: {e}")
-            except Exception as e:
-                _append_log(f"_on_task_completed: unexpected error: {e}")
-
-        # Start next queued download if any
+            
+        # Immediately start next queued download to keep the pipeline flowing
         if self.queued_downloads:
             next_task = self.queued_downloads.pop(0)
             self.active_downloads.append(next_task)
@@ -474,6 +530,102 @@ class DownloadManager(QObject):
                 QTimer.singleShot(0, lambda t=next_task: self._start_next_task(t))
             except Exception as e:
                 _append_log(f"_on_task_completed: failed to schedule next_task start: {e}")
+        
+        # Emit signal that we're gathering images
+        try:
+            self.download_gathering_images.emit(file_name)
+        except Exception:
+            pass
+        
+        # Offload heavy post-processing work to background thread
+        if hasattr(self, 'db_manager') and task.model_data and task.version and file_path:
+            try:
+                # Create metadata for the post-processing task
+                task_metadata = {
+                    'file_name': file_name,
+                    'original_file_name': getattr(task, 'original_file_name', None),
+                    'file_sha256': getattr(task, 'file_sha256', None),
+                    'primary_tag': getattr(task, 'primary_tag', None)
+                }
+                
+                # Create and start post-processing task
+                post_task = PostProcessTask(
+                    self.db_manager,
+                    task.model_data,
+                    task.version,
+                    file_path,
+                    file_size,  # file_size is passed in MB
+                    task_metadata
+                )
+                
+                # Connect signals to handle completion
+                post_task.signals.finished.connect(self._on_post_process_finished)
+                post_task.signals.error.connect(self._on_post_process_error)
+                
+                # Start the post-processing in background
+                try:
+                    post_task.setAutoDelete(False)
+                except Exception:
+                    pass
+                self.thread_pool.start(post_task)
+                
+                _append_log(f"_on_task_completed: started post-processing for '{file_name}'")
+                
+            except Exception as e:
+                _append_log(f"_on_task_completed: failed to start post-processing for '{file_name}': {e}")
+                # If post-processing fails to start, mark as completed anyway
+                self._on_post_process_finished(file_name)
+    def _on_post_process_finished(self, file_name):
+        """Called when post-processing (DB updates, image downloads) completes in background"""
+        _append_log(f"_on_post_process_finished: post-processing completed for '{file_name}'")
+        
+        # Mark download as fully completed
+        self.download_status[file_name] = 'completed'
+        
+        # Emit signal that download is fully complete
+        try:
+            self.download_fully_completed.emit(file_name)
+        except Exception:
+            pass
+            
+        # Clean up status tracking
+        try:
+            if file_name in self.download_status:
+                del self.download_status[file_name]
+        except Exception:
+            pass
+            
+        # Refresh UI
+        try:
+            self.downloads_changed.emit()
+        except Exception:
+            pass
+            
+    def _on_post_process_error(self, file_name, error_message):
+        """Called when post-processing fails"""
+        _append_log(f"_on_post_process_error: post-processing failed for '{file_name}': {error_message}")
+        
+        # Mark download as completed even if post-processing failed
+        self.download_status[file_name] = 'completed'
+        
+        # Emit signal that download is complete (even with errors)
+        try:
+            self.download_fully_completed.emit(file_name)
+        except Exception:
+            pass
+            
+        # Clean up status tracking
+        try:
+            if file_name in self.download_status:
+                del self.download_status[file_name]
+        except Exception:
+            pass
+            
+        # Still emit downloads_changed to update UI
+        try:
+            self.downloads_changed.emit()
+        except Exception:
+            pass
 
     def _start_next_task(self, task):
         try:

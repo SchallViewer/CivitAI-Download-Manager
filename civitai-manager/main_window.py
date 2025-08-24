@@ -89,6 +89,9 @@ class MainWindow(QMainWindow):
             self.download_manager.downloads_changed.connect(self.update_downloads_panel)
             self.download_manager.download_started.connect(self._notify_download_started)
             self.download_manager.download_queued.connect(self._notify_download_queued)
+            self.download_manager.download_file_completed.connect(self._notify_download_file_completed)
+            self.download_manager.download_gathering_images.connect(self._notify_download_gathering_images)
+            self.download_manager.download_fully_completed.connect(self._notify_download_fully_completed)
             # show noticeable message boxes when a download is started or queued
             try:
                 self.download_manager.download_started.connect(self._modal_download_started)
@@ -173,6 +176,31 @@ class MainWindow(QMainWindow):
     def _modal_download_queued(self, file_name: str):
         try:
             QMessageBox.information(self, "Download Queued", f"The model file was queued and will start when a slot is free:\n\n{file_name}", QMessageBox.Ok)
+        except Exception:
+            pass
+
+    def _notify_download_file_completed(self, file_name: str):
+        try:
+            msg = f"Model downloaded: {file_name} - Now gathering images..."
+            self.status_bar.showMessage(msg, 8000)
+            if getattr(self, 'tray', None) and isinstance(self.tray, QSystemTrayIcon):
+                self.tray.showMessage("Civitai Manager", f"Model downloaded: {file_name}", QSystemTrayIcon.Information, 5000)
+        except Exception:
+            pass
+
+    def _notify_download_gathering_images(self, file_name: str):
+        try:
+            msg = f"Gathering images for: {file_name}..."
+            self.status_bar.showMessage(msg, 10000)
+        except Exception:
+            pass
+
+    def _notify_download_fully_completed(self, file_name: str):
+        try:
+            msg = f"Download completed: {file_name}"
+            self.status_bar.showMessage(msg, 8000)
+            if getattr(self, 'tray', None) and isinstance(self.tray, QSystemTrayIcon):
+                self.tray.showMessage("Civitai Manager", f"Download completed: {file_name}", QSystemTrayIcon.Information, 5000)
         except Exception:
             pass
     
@@ -2194,7 +2222,7 @@ class MainWindow(QMainWindow):
         # Add active downloads
         if active_downloads:
             for task in active_downloads:
-                widget = DownloadProgressWidget(task)
+                widget = DownloadProgressWidget(task, self.download_manager)
                 # connect cancel request from widget to manager
                 try:
                     widget.cancel_requested.connect(lambda fn, mgr=self.download_manager: (mgr.cancel_download(fn), self.update_downloads_panel()))
@@ -2223,10 +2251,10 @@ class MainWindow(QMainWindow):
     def load_download_history(self):
         self.history_tree.clear()
         history = self.db_manager.get_download_history()
-        # Optionally filter out failed downloads
+        # Optionally filter out failed and deleted downloads
         try:
             if getattr(self, 'hide_failed_checkbox', None) and self.hide_failed_checkbox.isChecked():
-                history = [h for h in history if (h.get('status') or '').lower() != 'failed']
+                history = [h for h in history if (h.get('status') or '').lower() not in ('failed', 'deleted')]
         except Exception:
             pass
         
