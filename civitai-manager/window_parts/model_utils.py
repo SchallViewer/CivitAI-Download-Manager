@@ -48,12 +48,13 @@ class ModelDataUtils:
     def matches_base_model(model: Dict[str, Any], base_model: str) -> bool:
         """Check if model matches the specified base model."""
         try:
-            if base_model.lower() == 'all':
+            base_model_lower = base_model.lower()
+            if base_model_lower in ['all', 'any base', '']:
                 return True
             
             # Check model-level base model
             bm = model.get('baseModel') or model.get('base_model')
-            if isinstance(bm, str) and bm.lower() == str(base_model).lower():
+            if isinstance(bm, str) and bm.lower() == base_model_lower:
                 return True
             
             # Check version-level base models
@@ -62,7 +63,7 @@ class ModelDataUtils:
                 if not isinstance(v, dict):
                     continue
                 vb = v.get('baseModel') or v.get('base_model')
-                if isinstance(vb, str) and vb.lower() == str(base_model).lower():
+                if isinstance(vb, str) and vb.lower() == base_model_lower:
                     return True
         except Exception:
             pass

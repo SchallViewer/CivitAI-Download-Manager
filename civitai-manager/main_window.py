@@ -945,272 +945,30 @@ class MainWindow(QMainWindow):
         self.download_handler.delete_selected_version()
     
     def search_models(self):
-        if not self.api_key:
-            self.show_api_key_warning()
-            return
-            
+        """Trigger model search (delegated to search manager)."""
         try:
-            query = self.search_input.text()
-            model_type = self.model_type_combo.currentData()
-            # Expand model_type filter: when user selects LORA, also include Lycoris(LoCon) and DoRA
-            def _normalize_type(s):
-                return str(s or '').lower().replace(' ', '').replace('-', '')
-
-            allowed_types = None
-            if model_type and isinstance(model_type, str) and _normalize_type(model_type) == 'lora':
-                allowed_types = ['lora', 'lycoris', 'dora', 'locon']
-                # to ensure broader results from API, don't send the strict type filter
-                api_model_type = None
-            else:
-                api_model_type = model_type if model_type != 'all' else None
-            base_model = self.base_model_combo.currentData()
-            sort = self.sort_combo.currentData()
-            period = self.period_combo.currentData()
-            # nsfw checkbox: when checked include NSFW results, otherwise only safe
-            nsfw = True if getattr(self, 'nsfw_checkbox', None) and self.nsfw_checkbox.isChecked() else None
-
-            # model_type = model_type if model_type != "all" else None
-            
-            # Handle "all models" case differently
-            # if model_type == "all":
-            #     model_type = None  # Don't send type filter
-            # elif model_type == "TextualInversion":
-            #     model_type = "TextualInversion"
-
-            # Reset pagination
-            self.model_page = 1
-            self.model_has_more = True
-            self.search_cursor = None
-            
-            # Clear existing models
-            self.clear_model_grid()
-            
-            # Fetch models. If a free-text query is present, avoid sending base_model to API
-            # (some API endpoints reject baseModels with query). We'll filter client-side.
-            if query and base_model:
-                models_raw = self.api.search_models(
-                    query=query,
-                    model_type=api_model_type,
-                    base_model=None,
-                    nsfw=nsfw,
-                    sort=sort,
-                    period=period,
-                    limit=50,
-                    cursor=self.search_cursor
-                )
-                items = models_raw.get('items', [])
-                filtered = [m for m in items if self._matches_base_model(m, base_model)]
-                # apply expanded type filtering if requested
-                if allowed_types:
-                    def _type_ok(m):
-                        t = (m.get('type') or m.get('modelType') or '')
-                        if not isinstance(t, str):
-                            return False
-                        nt = t.lower().replace(' ', '').replace('-', '')
-                        return any(k in nt for k in allowed_types)
-                    filtered = [m for m in filtered if _type_ok(m)]
-                # keep metadata from raw response but override items for display
-                models = {'items': filtered, 'metadata': models_raw.get('metadata', {})}
-            else:
-                # Call API but be resilient to 400 errors caused by type filter; if that happens,
-                # re-run without the type filter and filter client-side.
-                try:
-                    models = self.api.search_models(
-                        query=query,
-                        model_type=api_model_type,
-                        base_model=base_model,
-                        nsfw=nsfw,
-                        sort=sort,
-                        period=period,
-                        limit=20,
-                        cursor=self.search_cursor
-                    )
-                except Exception as e:
-                    # If API refuses the type param, retry without type and do local filter
-                    try:
-                        models_raw = self.api.search_models(
-                            query=query,
-                            model_type=None,
-                            base_model=base_model,
-                            nsfw=nsfw,
-                            sort=sort,
-                            period=period,
-                            limit=50,
-                            cursor=self.search_cursor
-                        )
-                        items = models_raw.get('items', [])
-                        # client-side filter for model_type (with expanded LORA mapping)
-                        if allowed_types:
-                            def _type_ok(m):
-                                t = (m.get('type') or m.get('modelType') or '')
-                                if not isinstance(t, str):
-                                    return False
-                                nt = t.lower().replace(' ', '').replace('-', '')
-                                return any(k in nt for k in allowed_types)
-                            filtered = [m for m in items if _type_ok(m)]
-                            models = {'items': filtered, 'metadata': models_raw.get('metadata', {})}
-                        else:
-                            type_key = str(model_type or '').lower() if model_type else None
-                            if type_key:
-                                filtered = []
-                                for m in items:
-                                    t = (m.get('type') or m.get('modelType') or '')
-                                    if isinstance(t, str) and t.lower().replace(' ', '') == type_key.replace(' ', ''):
-                                        filtered.append(m)
-                                models = {'items': filtered, 'metadata': models_raw.get('metadata', {})}
-                            else:
-                                models = models_raw
-                    except Exception:
-                        raise
-
-            # update the small query log so users can see what was sent
-            try:
-                params_preview = {
-                    'query': query,
-                    'type': model_type,
-                    'base': base_model,
-                    'sort': sort,
-                    'period': period,
-                    'nsfw': nsfw
-                }
-                self.query_log_label.setText(json.dumps(params_preview))
-            except Exception:
-                pass
-            
-            # Add models to grid
-            self.add_models_to_grid(models.get('items', []))
-            
-            metadata = models.get('metadata', {})
-            total_items = metadata.get('totalItems', 0)
-            # update cursor if provided (cursor-based pagination)
-            self.search_cursor = metadata.get('nextCursor') or metadata.get('cursor')
-            self.model_has_more = bool(self.search_cursor)
-            # self.status_bar.showMessage(f"Found {models.get('metadata', {}).get('totalItems', 0)} models")
-            self.status_bar.showMessage(f"Found {total_items} models")
+            self.search_manager.search_models()
+            # Show right panel after search starts
             self.right_panel.setCurrentIndex(0)
         except Exception as e:
-            self.status_bar.showMessage(f"Error searching models: {str(e)}")
+            print(f"Error in search_models: {e}")
+            self.status_bar.showMessage(f"Search error: {e}")
     
     def check_scroll(self, value):
-        # Implement infinite scroll only when the left view is the search results
-        if getattr(self, 'current_left_view', 'search') != 'search':
-            return
-        scrollbar = self.scroll_area.verticalScrollBar()
-        if scrollbar.value() >= scrollbar.maximum() - 100 and self.model_has_more:
-            self.load_more_models()
+        """Handle scroll events for infinite loading."""
+        # Use the search manager's improved scroll handling
+        try:
+            self.search_manager.load_more_models_if_needed()
+        except Exception as e:
+            print(f"Error in scroll check: {e}")
     
     def load_more_models(self):
-        if not self.api_key or not self.model_has_more:
-            return
-            
+        """Load more models (delegated to search manager)."""
         try:
-            query = self.search_input.text()
-            model_type = self.model_type_combo.currentData()
-            model_type = model_type if model_type != "all" else None
-            base_model = self.base_model_combo.currentData()
-            sort = self.sort_combo.currentData()
-            period = self.period_combo.currentData()
-            # nsfw checkbox: when checked include NSFW results, otherwise omit param
-            nsfw = True if getattr(self, 'nsfw_checkbox', None) and self.nsfw_checkbox.isChecked() else None
-
-            # For query searches use cursor-based pagination
-            if query:
-                # For query-based navigation, avoid passing base_model to API; filter locally if needed
-                if base_model:
-                    models_raw = self.api.search_models(
-                        query=query,
-                        model_type=model_type,
-                        base_model=None,
-                        nsfw=nsfw,
-                        sort=sort,
-                        period=period,
-                        limit=50,
-                        cursor=self.search_cursor
-                    )
-                    metadata = models_raw.get('metadata', {})
-                    self.search_cursor = metadata.get('nextCursor') or metadata.get('cursor')
-                    self.model_has_more = bool(self.search_cursor)
-                    items = models_raw.get('items', [])
-                    filtered = [m for m in items if self._matches_base_model(m, base_model)]
-                    self.add_models_to_grid(filtered)
-                    self.status_bar.showMessage(f"Loaded more results (cursor present: {bool(self.search_cursor)})")
-                    try:
-                        self.query_log_label.setText(str({'cursor': self.search_cursor}))
-                    except Exception:
-                        pass
-                else:
-                    # regular query pagination
-                    try:
-                        models = self.api.search_models(
-                            query=query,
-                            model_type=model_type,
-                            base_model=base_model,
-                            nsfw=nsfw,
-                            sort=sort,
-                            period=period,
-                            limit=20,
-                            cursor=self.search_cursor
-                        )
-                        metadata = models.get('metadata', {})
-                        # advance cursor
-                        self.search_cursor = metadata.get('nextCursor') or metadata.get('cursor')
-                        self.model_has_more = bool(self.search_cursor)
-                        self.add_models_to_grid(models.get('items', []))
-                        self.status_bar.showMessage(f"Loaded more results (cursor present: {bool(self.search_cursor)})")
-                        try:
-                            self.query_log_label.setText(str({'cursor': self.search_cursor}))
-                        except Exception:
-                            pass
-                    except Exception:
-                        # If API rejects the model_type filter, retry without it and filter client-side
-                        try:
-                            models_raw = self.api.search_models(
-                                query=query,
-                                model_type=None,
-                                base_model=base_model,
-                                nsfw=nsfw,
-                                sort=sort,
-                                period=period,
-                                limit=50,
-                                cursor=self.search_cursor
-                            )
-                            metadata = models_raw.get('metadata', {})
-                            self.search_cursor = metadata.get('nextCursor') or metadata.get('cursor')
-                            self.model_has_more = bool(self.search_cursor)
-                            items = models_raw.get('items', [])
-                            type_key = str(model_type or '').lower() if model_type else None
-                            if type_key:
-                                filtered = []
-                                for m in items:
-                                    t = (m.get('type') or m.get('modelType') or '')
-                                    if isinstance(t, str) and t.lower().replace(' ', '') == type_key.replace(' ', ''):
-                                        filtered.append(m)
-                                self.add_models_to_grid(filtered)
-                            else:
-                                self.add_models_to_grid(items)
-                        except Exception as e:
-                            self.status_bar.showMessage(f"Error loading more models: {str(e)}")
-                # (handled above)
-            else:
-                # page-based pagination for non-query browsing
-                self.model_page += 1
-                models = self.api.search_models(
-                    query=None,
-                    model_type=model_type,
-                    base_model=base_model,
-                    nsfw=nsfw,
-                    sort=sort,
-                    period=period,
-                    limit=20,
-                    page=self.model_page
-                )
-                metadata = models.get('metadata', {})
-                total_pages = metadata.get('totalPages', 1)
-                self.model_has_more = self.model_page < total_pages
-                self.add_models_to_grid(models.get('items', []))
-                self.status_bar.showMessage(f"Loaded page {self.model_page} of {total_pages}")
+            self.search_manager.load_models()
         except Exception as e:
-            self.status_bar.showMessage(f"Error loading more models: {str(e)}")
+            print(f"Error loading more models: {e}")
+            self.status_bar.showMessage(f"Error loading more models: {e}")
     
     def add_models_to_grid(self, models):
         # Append new cards to internal list then reflow
@@ -1228,13 +986,11 @@ class MainWindow(QMainWindow):
         self.relayout_model_cards()
     
     def clear_model_grid(self):
-        # Remove all widgets from grid
-        # delete widgets and clear internal list
-        while self.model_grid_layout.count():
-            child = self.model_grid_layout.takeAt(0)
-            if child and child.widget():
-                child.widget().setParent(None)
-        self.model_cards = []
+        """Clear model grid (delegated to search manager)."""
+        try:
+            self.search_manager.clear_model_grid()
+        except Exception as e:
+            print(f"Error clearing model grid: {e}")
 
     def compute_columns(self):
         # Compute number of columns that fit in the scroll area viewport.
@@ -1251,17 +1007,11 @@ class MainWindow(QMainWindow):
             return 3
 
     def relayout_model_cards(self):
-        # Clear layout but keep widgets (they are in self.model_cards)
-        # Remove all items from layout
-        while self.model_grid_layout.count():
-            item = self.model_grid_layout.takeAt(0)
-            # do not delete widgets here; they remain in model_cards
-
-        cols = self.compute_columns()
-        for idx, card in enumerate(self.model_cards):
-            row = idx // cols
-            col = idx % cols
-            self.model_grid_layout.addWidget(card, row, col)
+        """Relayout model cards (delegated to search manager)."""
+        try:
+            self.search_manager.relayout_model_cards()
+        except Exception as e:
+            print(f"Error relaying model cards: {e}")
 
     def resizeEvent(self, event):
         try:
