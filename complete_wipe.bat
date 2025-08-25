@@ -27,18 +27,19 @@ if errorlevel 1 (
 )
 
 REM Check if the wipe script exists
-if not exist "complete_wipe.py" (
-    echo ERROR: complete_wipe.py not found in current directory.
-    echo Please ensure you're running this from the correct folder.
+REM Check if the wipe script exists in the civitai-manager folder
+if not exist "civitai-manager\complete_wipe.py" (
+    echo ERROR: civitai-manager\complete_wipe.py not found.
+    echo Please ensure you're running this from the repository root (where this batch lives).
     echo.
     pause
     exit /b 1
 )
 
-REM Execute the Python wipe script
-echo Running complete data wipe script...
+REM Execute the Python wipe script from the civitai-manager folder
+echo Running complete data wipe script (civitai-manager\complete_wipe.py)...
 echo.
-python complete_wipe.py
+python "civitai-manager\complete_wipe.py"
 
 REM Check if the script ran successfully
 if errorlevel 1 (

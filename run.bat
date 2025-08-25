@@ -8,3 +8,4 @@ REM Launch the application with Python (ensure Python is on your PATH)
 python main.py
 
 REM Pause to keep the console window open after exit
+PAUSE
