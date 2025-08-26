@@ -16,6 +16,8 @@ class SettingsManager:
             "auto_import": True,
             # Comma-separated ordered list of tag priorities (highest first) used for filename primary tag selection
             "priority_tags": "meme,concept,character,style,clothing,pose",
+            # Comma-separated list of filename aliases corresponding to priority_tags (same order)
+            "tag_aliases": "meme,concept,chr,style,clothing,pose",
             # workspace images directory is fixed to 'images' under workspace; not user-configurable
         }
         # load external config first (if exists) so QSettings picks up values

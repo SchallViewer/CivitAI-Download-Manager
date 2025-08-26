@@ -1717,12 +1717,41 @@ class MainWindow(QMainWindow):
                     custom_tags.append(p)
 
         primary_tag = getattr(self, '_current_primary_tag', '') or ''
+        
+        # Get tag alias for filename
+        def get_tag_alias(tag: str) -> str:
+            """Get the filename alias for a priority tag from settings"""
+            try:
+                if not tag:
+                    return tag
+                    
+                # Get priority tags and aliases from settings
+                pri_raw = self.settings_manager.get("priority_tags", "") or ""
+                ali_raw = self.settings_manager.get("tag_aliases", "") or ""
+                priority_tags = [t.strip() for t in pri_raw.split(',') if t.strip()]
+                alias_tags = [t.strip() for t in ali_raw.split(',') if t.strip()]
+                
+                # Find the tag in priority list and return corresponding alias
+                tag_lower = tag.lower()
+                for i, priority_tag in enumerate(priority_tags):
+                    if priority_tag.lower() == tag_lower:
+                        if i < len(alias_tags):
+                            return alias_tags[i]
+                        break
+                
+                # Fallback to original tag if no alias found
+                return tag
+            except Exception:
+                return tag
+        
         any_added = False
         for f in selected_files:
             base_fname = f"{_sanitize_filename(model_name)} - {_sanitize_filename(version_name)}"
             parts = [base_fname]
             if primary_tag:
-                parts.append(_sanitize_filename(primary_tag))
+                # Use alias for filename
+                tag_alias = get_tag_alias(primary_tag)
+                parts.append(_sanitize_filename(tag_alias))
             for ct in custom_tags:
                 parts.append(_sanitize_filename(ct))
             fname = " - ".join(parts) + ".safetensors"

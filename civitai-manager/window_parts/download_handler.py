@@ -98,6 +98,32 @@ class DownloadHandler:
         
         primary_tag = getattr(main, '_current_primary_tag', '') or ''
         
+        # Get tag alias for filename
+        def get_tag_alias(tag: str) -> str:
+            """Get the filename alias for a priority tag from settings"""
+            try:
+                if not tag:
+                    return tag
+                    
+                # Get priority tags and aliases from settings
+                pri_raw = main.settings_manager.get("priority_tags", "") or ""
+                ali_raw = main.settings_manager.get("tag_aliases", "") or ""
+                priority_tags = [t.strip() for t in pri_raw.split(',') if t.strip()]
+                alias_tags = [t.strip() for t in ali_raw.split(',') if t.strip()]
+                
+                # Find the tag in priority list and return corresponding alias
+                tag_lower = tag.lower()
+                for i, priority_tag in enumerate(priority_tags):
+                    if priority_tag.lower() == tag_lower:
+                        if i < len(alias_tags):
+                            return alias_tags[i]
+                        break
+                
+                # Fallback to original tag if no alias found
+                return tag
+            except Exception:
+                return tag
+        
         # Create download tasks
         any_added = False
         for f in selected_files:
@@ -105,7 +131,9 @@ class DownloadHandler:
             base_fname = f"{self.utils.sanitize_filename(model_name)} - {self.utils.sanitize_filename(version_name)}"
             parts = [base_fname]
             if primary_tag:
-                parts.append(self.utils.sanitize_filename(primary_tag))
+                # Use alias for filename
+                tag_alias = get_tag_alias(primary_tag)
+                parts.append(self.utils.sanitize_filename(tag_alias))
             for ct in custom_tags:
                 parts.append(self.utils.sanitize_filename(ct))
             fname = " - ".join(parts) + ".safetensors"
