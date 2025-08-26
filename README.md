@@ -36,7 +36,7 @@ Desktop application for brownsing, downloading and managing Checkpoints, LoRA's 
 - Input text to add custom tag to filename
 - Manages downloaded models
 
-### Download Hsitory
+### Download History
 - Keeps tracking of every download made. (Saved on local database)
 - Saves Title, Model ID, Model version, Date Downloaded, Model size, file status.
 - Saves deleted and failed downloads logs.
