@@ -832,7 +832,18 @@ class MainWindow(QMainWindow):
         self.downloads_action.triggered.connect(self.show_downloads_panel)
         self.history_action.triggered.connect(self.show_history_panel)
         self.settings_action.triggered.connect(self.open_settings)
-        self.search_input.returnPressed.connect(self.search_models)
+        self.search_input.returnPressed.connect(self.handle_search_input)
+        # Add debounced live search for downloaded explorer to prevent UI freezes
+        self.search_input.textChanged.connect(self.handle_search_text_changed)
+        
+        # Create debounce timer for downloaded filtering
+        self.download_filter_timer = QTimer()
+        self.download_filter_timer.setSingleShot(True)
+        self.download_filter_timer.timeout.connect(self.filter_downloaded_models)
+        
+        # Progressive rendering timer for large result sets
+        self.progressive_render_timer = QTimer()
+        self.progressive_render_timer.timeout.connect(self.render_next_batch)
         self.model_type_combo.currentIndexChanged.connect(self.search_models)
         # connect new filter widgets
         self.base_model_combo.currentIndexChanged.connect(self.search_models)
@@ -943,6 +954,205 @@ class MainWindow(QMainWindow):
     def delete_selected_version(self):
         """Delegate to download handler."""
         self.download_handler.delete_selected_version()
+    
+    def handle_search_input(self):
+        """Handle search input based on current explorer context."""
+        current_view = getattr(self, 'current_left_view', 'search')
+        if current_view == 'downloaded':
+            # In downloaded explorer, treat as filter (no action needed, textChanged handles it)
+            pass
+        else:
+            # In search explorer, perform API search
+            self.search_models()
+    
+    def handle_search_text_changed(self):
+        """Handle real-time search text changes with debouncing."""
+        current_view = getattr(self, 'current_left_view', 'search')
+        if current_view == 'downloaded':
+            # Stop any ongoing progressive rendering
+            try:
+                self.progressive_render_timer.stop()
+            except Exception:
+                pass
+            
+            # Debounce the filter operation (300ms delay)
+            try:
+                self.download_filter_timer.stop()
+                self.download_filter_timer.start(300)
+            except Exception:
+                # Fallback to immediate filtering if timer fails
+                self.filter_downloaded_models()
+    
+    def filter_downloaded_models(self):
+        """Filter downloaded models by search text with progressive rendering."""
+        query = self.search_input.text().strip().lower()
+        
+        if not hasattr(self, '_left_agg_downloaded'):
+            return
+        
+        # Clear current grid immediately
+        try:
+            while self.model_grid_layout.count():
+                child = self.model_grid_layout.takeAt(0)
+                if child and child.widget():
+                    child.widget().setParent(None)
+            self.model_cards = []
+        except Exception:
+            pass
+        
+        # Filter matching models (fast operation)
+        filtered_models = []
+        for k, md in self._left_agg_downloaded.items():
+            model_name = (md.get('name') or '').lower()
+            
+            # Show all if no query, otherwise filter by name
+            if not query or query in model_name:
+                filtered_models.append((k, md))
+        
+        # Prepare for progressive rendering
+        self.filtered_models_queue = filtered_models
+        self.render_batch_size = 6  # Render 6 cards per batch to prevent freezes
+        self.rendered_count = 0
+        
+        # Update status immediately
+        total_count = len(self._left_agg_downloaded)
+        filtered_count = len(filtered_models)
+        if query:
+            self.status_bar.showMessage(f"Filtering... (found {filtered_count} of {total_count} models)")
+        else:
+            self.status_bar.showMessage(f"Loading {total_count} downloaded models...")
+        
+        # Start progressive rendering if we have results
+        if filtered_models:
+            if len(filtered_models) <= 12:  # Small result sets: render immediately
+                self.render_all_immediately(filtered_models)
+            else:  # Large result sets: use progressive rendering
+                self.progressive_render_timer.start(16)  # ~60 FPS rendering
+        else:
+            # No results
+            if query:
+                self.status_bar.showMessage(f"No downloaded models match '{query}'")
+            else:
+                self.status_bar.showMessage("No downloaded models found")
+    
+    def render_all_immediately(self, models_list):
+        """Render all cards immediately for small result sets."""
+        try:
+            missing_map = {}
+            if hasattr(self, 'db_manager'):
+                missing_map = self.db_manager.get_missing_status_map() or {}
+        except Exception:
+            missing_map = {}
+        
+        for k, md in models_list:
+            self.create_and_add_card(md, missing_map)
+        
+        # Final layout and status update
+        try:
+            self.relayout_model_cards()
+        except Exception:
+            pass
+        
+        query = self.search_input.text().strip()
+        total_count = len(self._left_agg_downloaded) if hasattr(self, '_left_agg_downloaded') else 0
+        filtered_count = len(models_list)
+        
+        if query:
+            self.status_bar.showMessage(f"Showing {filtered_count} of {total_count} downloaded models (filtered)")
+        else:
+            self.status_bar.showMessage(f"Showing {total_count} downloaded models")
+    
+    def render_next_batch(self):
+        """Render the next batch of filtered models progressively."""
+        try:
+            if not hasattr(self, 'filtered_models_queue') or not self.filtered_models_queue:
+                self.progressive_render_timer.stop()
+                self.finish_progressive_rendering()
+                return
+            
+            # Get missing status map once per batch for efficiency
+            missing_map = {}
+            try:
+                if hasattr(self, 'db_manager'):
+                    missing_map = self.db_manager.get_missing_status_map() or {}
+            except Exception:
+                pass
+            
+            # Render next batch
+            batch_count = 0
+            while batch_count < self.render_batch_size and self.filtered_models_queue:
+                k, md = self.filtered_models_queue.pop(0)
+                self.create_and_add_card(md, missing_map)
+                batch_count += 1
+                self.rendered_count += 1
+            
+            # Update progress
+            total_to_render = self.rendered_count + len(self.filtered_models_queue)
+            self.status_bar.showMessage(f"Loading... ({self.rendered_count}/{total_to_render} models)")
+            
+            # Continue or finish
+            if not self.filtered_models_queue:
+                self.progressive_render_timer.stop()
+                self.finish_progressive_rendering()
+            
+        except Exception as e:
+            # Stop rendering on error
+            self.progressive_render_timer.stop()
+            print(f"Error in progressive rendering: {e}")
+    
+    def create_and_add_card(self, model_data, missing_map):
+        """Create and add a single model card."""
+        try:
+            card = ModelCard(model_data)
+            card.clicked.connect(self.show_downloaded_model_details)
+            
+            # Set local image if available
+            imgs = model_data.get('_images') or []
+            if imgs:
+                try:
+                    from PyQt5.QtGui import QPixmap
+                    pix = QPixmap(imgs[0])
+                    if not pix.isNull():
+                        card.set_image(pix)
+                except Exception:
+                    pass
+            
+            # Highlight if Missing
+            try:
+                mid = model_data.get('id') or model_data.get('model_id') or model_data.get('_db_id')
+                if mid in missing_map:
+                    card.setStyleSheet(card.styleSheet() + '\nModelCard { background-color: #664; border: 2px solid #ffeb3b; }')
+            except Exception:
+                pass
+            
+            self.model_cards.append(card)
+            
+        except Exception as e:
+            print(f"Error creating card: {e}")
+    
+    def finish_progressive_rendering(self):
+        """Complete the progressive rendering process."""
+        try:
+            # Final layout
+            self.relayout_model_cards()
+            
+            # Final status update
+            query = self.search_input.text().strip()
+            total_count = len(self._left_agg_downloaded) if hasattr(self, '_left_agg_downloaded') else 0
+            filtered_count = len(self.model_cards)
+            
+            if query:
+                self.status_bar.showMessage(f"Showing {filtered_count} of {total_count} downloaded models (filtered)")
+            else:
+                self.status_bar.showMessage(f"Showing {total_count} downloaded models")
+            
+            # Cleanup
+            if hasattr(self, 'filtered_models_queue'):
+                del self.filtered_models_queue
+            self.rendered_count = 0
+            
+        except Exception as e:
+            print(f"Error finishing progressive rendering: {e}")
     
     def search_models(self):
         """Trigger model search (delegated to search manager)."""
@@ -1889,6 +2099,17 @@ class MainWindow(QMainWindow):
                 pass
     
     def show_search_panel(self):
+        # Save current model selection for restoration
+        current_model_id = None
+        current_version_id = None
+        try:
+            if hasattr(self, 'current_model') and self.current_model:
+                current_model_id = self.current_model.get('id')
+            if hasattr(self, 'current_version') and self.current_version:
+                current_version_id = self.current_version.get('id')
+        except Exception:
+            pass
+        
         # switch back to search left view
         try:
             self.current_left_view = 'search'
@@ -1897,6 +2118,13 @@ class MainWindow(QMainWindow):
             self.title_container.setStyleSheet(f"background-color: {PRIMARY_COLOR.name()}; border-radius: 6px; padding: 10px;")
         except Exception:
             pass
+        
+        # Update search input placeholder
+        try:
+            self.search_input.setPlaceholderText("Search models...")
+        except Exception:
+            pass
+        
         # ensure download button is visible again when returning to search
         try:
             self.download_btn.setVisible(True)
@@ -1904,6 +2132,13 @@ class MainWindow(QMainWindow):
             self.download_btn.setEnabled(bool(getattr(self, 'current_version', None)))
         except Exception:
             pass
+        
+        # Hide delete button (only for downloaded explorer)
+        try:
+            self.delete_version_btn.setVisible(False)
+        except Exception:
+            pass
+        
         # restore cached search cards if available
         try:
             if getattr(self, '_search_cache', None):
@@ -1935,8 +2170,35 @@ class MainWindow(QMainWindow):
                     pass
         except Exception:
             pass
+        
+        # Try to restore previous model selection
+        try:
+            saved_selection = getattr(self, '_saved_selection', {})
+            if (saved_selection.get('view') == 'downloaded' and 
+                saved_selection.get('model_id') and 
+                current_model_id != saved_selection.get('model_id')):
+                # Try to find and select the same model in search results
+                self.restore_model_selection(saved_selection.get('model_id'), saved_selection.get('version_id'))
+        except Exception:
+            pass
 
         self.right_panel.setCurrentIndex(0)
+    
+    def restore_model_selection(self, target_model_id, target_version_id=None):
+        """Try to restore model selection after explorer switch."""
+        try:
+            if not self.model_cards:
+                return
+            
+            for card in self.model_cards:
+                card_model_data = getattr(card, 'model_data', {})
+                if card_model_data.get('id') == target_model_id:
+                    # Found the matching model card, simulate click
+                    if hasattr(card, 'clicked'):
+                        card.clicked.emit()
+                    break
+        except Exception:
+            pass
     
     def show_downloads_panel(self):
         self.right_panel.setCurrentIndex(1)

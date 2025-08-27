@@ -17,8 +17,24 @@ class DownloadedManager:
         """Show downloaded models in the left grid panel."""
         main = self.main_window
         
-        # Record previous view for caching
+        # Record previous view for caching and selection preservation
         prev_view = getattr(main, 'current_left_view', 'search')
+        
+        # Save current model selection for restoration later
+        current_model_id = None
+        current_version_id = None
+        try:
+            if hasattr(main, 'current_model') and main.current_model:
+                current_model_id = main.current_model.get('id')
+            if hasattr(main, 'current_version') and main.current_version:
+                current_version_id = main.current_version.get('id')
+            main._saved_selection = {
+                'model_id': current_model_id,
+                'version_id': current_version_id,
+                'view': prev_view
+            }
+        except Exception:
+            pass
         
         # Cache search results when switching away
         try:
@@ -48,6 +64,12 @@ class DownloadedManager:
         except Exception:
             pass
         
+        # Clear search input to avoid confusion (will be used for filtering now)
+        try:
+            main.search_input.setPlaceholderText("Filter downloaded models...")
+        except Exception:
+            pass
+        
         # Load downloaded models
         try:
             # Disable search pagination
@@ -60,6 +82,17 @@ class DownloadedManager:
             
             self.load_downloaded_models_left()
             main.status_bar.showMessage("Showing downloaded models")
+            
+            # Try to restore previous model selection if switching from search
+            try:
+                saved_selection = getattr(main, '_saved_selection', {})
+                if (saved_selection.get('view') == 'search' and 
+                    saved_selection.get('model_id')):
+                    # Try to find and select the same model in downloaded results
+                    self.restore_downloaded_selection(saved_selection.get('model_id'), saved_selection.get('version_id'))
+            except Exception:
+                pass
+                
         except Exception as e:
             print("Error showing downloaded explorer:", e)
             # Fallback to right panel if left loading fails
@@ -165,6 +198,24 @@ class DownloadedManager:
         
         # Layout cards in grid
         main.relayout_model_cards()
+    
+    def restore_downloaded_selection(self, target_model_id, target_version_id=None):
+        """Try to restore model selection in downloaded explorer."""
+        main = self.main_window
+        try:
+            if not hasattr(main, 'model_cards') or not main.model_cards:
+                return
+            
+            for card in main.model_cards:
+                card_model_data = getattr(card, 'model_data', {})
+                if (card_model_data.get('id') == target_model_id or 
+                    card_model_data.get('model_id') == target_model_id):
+                    # Found the matching model card, simulate click
+                    if hasattr(card, 'clicked'):
+                        card.clicked.emit()
+                    break
+        except Exception:
+            pass
     
     def load_downloaded_models(self):
         """Load downloaded models into the right panel grid (original functionality)."""
