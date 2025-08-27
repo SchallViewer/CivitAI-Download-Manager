@@ -844,11 +844,11 @@ class MainWindow(QMainWindow):
         # Progressive rendering timer for large result sets
         self.progressive_render_timer = QTimer()
         self.progressive_render_timer.timeout.connect(self.render_next_batch)
-        self.model_type_combo.currentIndexChanged.connect(self.search_models)
+        self.model_type_combo.currentIndexChanged.connect(self.handle_filter_change)
         # connect new filter widgets
-        self.base_model_combo.currentIndexChanged.connect(self.search_models)
-        self.sort_combo.currentIndexChanged.connect(self.search_models)
-        self.period_combo.currentIndexChanged.connect(self.search_models)
+        self.base_model_combo.currentIndexChanged.connect(self.handle_filter_change)
+        self.sort_combo.currentIndexChanged.connect(self.handle_filter_change)
+        self.period_combo.currentIndexChanged.connect(self.handle_filter_change)
         # nsfw checkbox
         try:
             self.nsfw_checkbox.stateChanged.connect(self.search_models)
@@ -955,6 +955,16 @@ class MainWindow(QMainWindow):
         """Delegate to download handler."""
         self.download_handler.delete_selected_version()
     
+    def handle_filter_change(self):
+        """Handle filter changes based on current explorer context."""
+        current_view = getattr(self, 'current_left_view', 'search')
+        if current_view == 'downloaded':
+            # In downloaded explorer, filter downloaded models
+            self.filter_downloaded_models()
+        else:
+            # In search explorer, perform API search
+            self.search_models()
+    
     def handle_search_input(self):
         """Handle search input based on current explorer context."""
         current_view = getattr(self, 'current_left_view', 'search')
@@ -984,11 +994,16 @@ class MainWindow(QMainWindow):
                 self.filter_downloaded_models()
     
     def filter_downloaded_models(self):
-        """Filter downloaded models by search text with progressive rendering."""
-        query = self.search_input.text().strip().lower()
-        
+        """Filter downloaded models by search text and all filter criteria with progressive rendering."""
         if not hasattr(self, '_left_agg_downloaded'):
             return
+        
+        # Get all filter criteria
+        query = self.search_input.text().strip().lower()
+        selected_model_type = self.model_type_combo.currentData()
+        selected_base_model = self.base_model_combo.currentData()
+        selected_sort = self.sort_combo.currentData()
+        selected_tag = self.period_combo.currentData()
         
         # Clear current grid immediately
         try:
@@ -1000,40 +1015,206 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         
-        # Filter matching models (fast operation)
+        # Filter matching models
         filtered_models = []
         for k, md in self._left_agg_downloaded.items():
+            # Name filter
             model_name = (md.get('name') or '').lower()
+            if query and query not in model_name:
+                continue
             
-            # Show all if no query, otherwise filter by name
-            if not query or query in model_name:
-                filtered_models.append((k, md))
+            # Model type filter
+            if selected_model_type and selected_model_type != "all":
+                model_type = self.get_model_type(md)
+                if not self.matches_model_type(model_type, selected_model_type):
+                    continue
+            
+            # Base model filter
+            if selected_base_model:
+                base_model = self.get_base_model(md)
+                if not self.matches_base_model(base_model, selected_base_model):
+                    continue
+            
+            # Tag filter
+            if selected_tag:
+                if not self.has_tag(md, selected_tag):
+                    continue
+            
+            filtered_models.append((k, md))
+        
+        # Sort filtered models
+        filtered_models = self.sort_downloaded_models(filtered_models, selected_sort)
         
         # Prepare for progressive rendering
         self.filtered_models_queue = filtered_models
-        self.render_batch_size = 6  # Render 6 cards per batch to prevent freezes
+        self.render_batch_size = 6
         self.rendered_count = 0
         
         # Update status immediately
         total_count = len(self._left_agg_downloaded)
         filtered_count = len(filtered_models)
+        
+        filter_parts = []
         if query:
-            self.status_bar.showMessage(f"Filtering... (found {filtered_count} of {total_count} models)")
+            filter_parts.append(f"name: '{query}'")
+        if selected_model_type and selected_model_type != "all":
+            filter_parts.append(f"type: {self.model_type_combo.currentText()}")
+        if selected_base_model:
+            filter_parts.append(f"base: {self.base_model_combo.currentText()}")
+        if selected_tag:
+            filter_parts.append(f"tag: {self.period_combo.currentText()}")
+        
+        if filter_parts:
+            filter_desc = ", ".join(filter_parts)
+            self.status_bar.showMessage(f"Filtering by {filter_desc}... (found {filtered_count} of {total_count} models)")
         else:
             self.status_bar.showMessage(f"Loading {total_count} downloaded models...")
         
         # Start progressive rendering if we have results
         if filtered_models:
-            if len(filtered_models) <= 12:  # Small result sets: render immediately
+            if len(filtered_models) <= 12:
                 self.render_all_immediately(filtered_models)
-            else:  # Large result sets: use progressive rendering
-                self.progressive_render_timer.start(16)  # ~60 FPS rendering
+            else:
+                self.progressive_render_timer.start(16)
         else:
             # No results
-            if query:
-                self.status_bar.showMessage(f"No downloaded models match '{query}'")
+            if filter_parts:
+                self.status_bar.showMessage(f"No downloaded models match the selected filters")
             else:
                 self.status_bar.showMessage("No downloaded models found")
+    
+    def get_model_type(self, model_data):
+        """Extract model type from model data."""
+        try:
+            return model_data.get('type') or model_data.get('modelType') or model_data.get('model_type') or ''
+        except Exception:
+            return ''
+    
+    def matches_model_type(self, model_type, filter_type):
+        """Check if model type matches filter."""
+        try:
+            if not model_type or not filter_type:
+                return True
+            
+            # Normalize model type for comparison
+            type_mapping = {
+                'LORA': 'LORA',
+                'LoRA': 'LORA', 
+                'Embeddings': 'TextualInversion',
+                'TextualInversion': 'TextualInversion',
+                'Hypernetwork': 'Hypernetwork',
+                'Checkpoint': 'Checkpoint',
+                'AestheticGradient': 'AestheticGradient',
+                'Aesthetic': 'AestheticGradient',
+                'Textures': 'Textures'
+            }
+            
+            normalized_model_type = type_mapping.get(model_type, model_type)
+            return normalized_model_type == filter_type
+            
+        except Exception:
+            return True
+    
+    def get_base_model(self, model_data):
+        """Extract base model from model data."""
+        try:
+            # Try model-level baseModel first
+            base_model = model_data.get('baseModel')
+            if base_model:
+                return str(base_model)
+            
+            # Try from first version
+            versions = model_data.get('modelVersions') or model_data.get('versions') or []
+            if versions and isinstance(versions[0], dict):
+                base_model = versions[0].get('baseModel') or versions[0].get('base_model')
+                if base_model:
+                    return str(base_model)
+            
+            return ''
+        except Exception:
+            return ''
+    
+    def matches_base_model(self, model_base, filter_base):
+        """Check if base model matches filter."""
+        try:
+            if not model_base or not filter_base:
+                return True
+            
+            model_base_lower = model_base.lower()
+            filter_base_lower = filter_base.lower()
+            
+            # Exact match
+            if model_base_lower == filter_base_lower:
+                return True
+            
+            # Partial matches for common variations
+            if 'sd 1.5' in filter_base_lower and ('sd1.5' in model_base_lower or 'sd 1.5' in model_base_lower):
+                return True
+            if 'sdxl' in filter_base_lower and 'sdxl' in model_base_lower:
+                return True
+            if 'illustrious' in filter_base_lower and 'illustrious' in model_base_lower:
+                return True
+            if 'pony' in filter_base_lower and 'pony' in model_base_lower:
+                return True
+            if 'noobai' in filter_base_lower and ('noobai' in model_base_lower or 'nai' in model_base_lower):
+                return True
+            
+            return False
+        except Exception:
+            return True
+    
+    def has_tag(self, model_data, target_tag):
+        """Check if model has the specified tag."""
+        try:
+            tags = model_data.get('tags') or []
+            target_tag_lower = target_tag.lower()
+            
+            for tag_item in tags:
+                if isinstance(tag_item, dict):
+                    tag_name = tag_item.get('name', '').strip().lower()
+                else:
+                    tag_name = str(tag_item or '').strip().lower()
+                
+                if tag_name == target_tag_lower:
+                    return True
+            
+            return False
+        except Exception:
+            return False
+    
+    def sort_downloaded_models(self, models_list, sort_type):
+        """Sort downloaded models based on sort criteria."""
+        try:
+            if not sort_type or sort_type == "newest":
+                # Sort by newest (download time or model creation time)
+                def sort_key(item):
+                    k, md = item
+                    # Try to get download timestamp or creation time
+                    try:
+                        # Check if we have download info with timestamp
+                        if hasattr(self, 'db_manager'):
+                            # This would need to be implemented in database.py to get download timestamp
+                            pass
+                        # Fallback to model creation date
+                        created_at = md.get('createdAt') or md.get('created_at') or '1970-01-01'
+                        return created_at
+                    except Exception:
+                        return '1970-01-01'
+                
+                return sorted(models_list, key=sort_key, reverse=True)
+            
+            elif sort_type == "title":
+                # Sort by title alphabetically
+                def sort_key(item):
+                    k, md = item
+                    return (md.get('name') or '').lower()
+                
+                return sorted(models_list, key=sort_key)
+            
+            return models_list
+            
+        except Exception:
+            return models_list
     
     def render_all_immediately(self, models_list):
         """Render all cards immediately for small result sets."""
@@ -2122,6 +2303,14 @@ class MainWindow(QMainWindow):
         # Update search input placeholder
         try:
             self.search_input.setPlaceholderText("Search models...")
+        except Exception:
+            pass
+        
+        # Restore search explorer filter options
+        try:
+            from window_parts.downloaded_manager import DownloadedManager
+            dm = DownloadedManager(self)
+            dm.restore_search_filters()
         except Exception:
             pass
         

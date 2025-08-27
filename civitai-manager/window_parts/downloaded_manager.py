@@ -70,6 +70,9 @@ class DownloadedManager:
         except Exception:
             pass
         
+        # Update filter options for downloaded explorer
+        self.setup_downloaded_filters()
+        
         # Load downloaded models
         try:
             # Disable search pagination
@@ -107,6 +110,128 @@ class DownloadedManager:
                     main.right_panel.setCurrentIndex(idx)
             except Exception:
                 pass
+    
+    def setup_downloaded_filters(self):
+        """Configure filter options for downloaded explorer mode."""
+        main = self.main_window
+        
+        try:
+            # Store original filter states if not already stored
+            if not hasattr(main, '_original_filters_saved'):
+                main._original_sort_items = []
+                main._original_period_items = []
+                
+                # Save original sort combo items
+                for i in range(main.sort_combo.count()):
+                    text = main.sort_combo.itemText(i)
+                    data = main.sort_combo.itemData(i)
+                    main._original_sort_items.append((text, data))
+                
+                # Save original period combo items
+                for i in range(main.period_combo.count()):
+                    text = main.period_combo.itemText(i)
+                    data = main.period_combo.itemData(i)
+                    main._original_period_items.append((text, data))
+                
+                main._original_filters_saved = True
+            
+            # Update sort combo for downloaded explorer
+            main.sort_combo.clear()
+            main.sort_combo.addItem("Newest", "newest")
+            main.sort_combo.addItem("Title Name", "title")
+            
+            # Update period combo to show available tags
+            main.period_combo.clear()
+            main.period_combo.addItem("All Tags", None)
+            
+            # Collect available tags from downloaded models
+            available_tags = self.get_available_tags()
+            for tag in available_tags:
+                main.period_combo.addItem(tag, tag.lower())
+                
+        except Exception as e:
+            print(f"Error setting up downloaded filters: {e}")
+    
+    def get_available_tags(self):
+        """Get available tags from downloaded models based on priority."""
+        main = self.main_window
+        
+        try:
+            if not hasattr(main, '_left_agg_downloaded'):
+                print("DEBUG: No _left_agg_downloaded attribute")
+                return []
+            
+            print(f"DEBUG: _left_agg_downloaded has {len(main._left_agg_downloaded)} models")
+            
+            # Get priority tags from settings
+            try:
+                pri_raw = main.settings_manager.get("priority_tags", "") or ""
+                priority_tags = [t.strip() for t in pri_raw.split(',') if t.strip()]
+                if not priority_tags:
+                    priority_tags = ['meme', 'concept', 'character', 'style', 'clothing', 'pose']
+            except Exception:
+                priority_tags = ['meme', 'concept', 'character', 'style', 'clothing', 'pose']
+            
+            # Collect all tags from downloaded models
+            found_tags = set()
+            for k, md in main._left_agg_downloaded.items():
+                print(f"DEBUG: Checking model {k}")
+                print(f"DEBUG: Model data keys: {list(md.keys())}")
+                
+                tags = md.get('tags') or []
+                print(f"DEBUG: Found {len(tags)} tags in model {k}")
+                
+                for tag_item in tags:
+                    if isinstance(tag_item, dict):
+                        tag_name = tag_item.get('name', '').strip().lower()
+                    else:
+                        tag_name = str(tag_item or '').strip().lower()
+                    
+                    if tag_name:
+                        print(f"DEBUG: Adding tag: {tag_name}")
+                        found_tags.add(tag_name)
+            
+            print(f"DEBUG: Total unique tags found: {len(found_tags)}")
+            print(f"DEBUG: Tags: {sorted(found_tags)}")
+            
+            # Return tags in priority order, then alphabetical for others
+            ordered_tags = []
+            for priority_tag in priority_tags:
+                if priority_tag.lower() in found_tags:
+                    ordered_tags.append(priority_tag.title())
+                    found_tags.remove(priority_tag.lower())
+            
+            # Add remaining tags alphabetically
+            remaining_tags = sorted([tag.title() for tag in found_tags])
+            ordered_tags.extend(remaining_tags)
+            
+            print(f"DEBUG: Final ordered tags: {ordered_tags}")
+            return ordered_tags
+            
+        except Exception as e:
+            print(f"Error getting available tags: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
+    
+    def restore_search_filters(self):
+        """Restore original filter options when returning to search explorer."""
+        main = self.main_window
+        
+        try:
+            if hasattr(main, '_original_filters_saved'):
+                # Restore sort combo
+                main.sort_combo.clear()
+                for text, data in main._original_sort_items:
+                    main.sort_combo.addItem(text, data)
+                
+                # Restore period combo
+                main.period_combo.clear()
+                for text, data in main._original_period_items:
+                    main.period_combo.addItem(text, data)
+                    
+        except Exception as e:
+            print(f"Error restoring search filters: {e}")
     
     def load_downloaded_models_left(self):
         """Load downloaded models into the left-hand model grid."""

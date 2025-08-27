@@ -315,7 +315,7 @@ class DatabaseManager:
             cursor = self.conn.cursor()
             cursor.execute('''
                 SELECT d.id, d.download_date,
-                       m.model_id, m.name AS model_name, m.metadata AS model_metadata,
+                       m.model_id, m.name AS model_name, m.metadata AS model_metadata, m.tags,
                        v.version_id, v.name AS version
                 FROM downloads d
                 JOIN models m ON m.model_id = d.model_id
@@ -325,11 +325,19 @@ class DatabaseManager:
             ''')
             rows = cursor.fetchall()
             results = []
-            for (row_id, download_date, model_id, model_name, model_meta, version_id, version_name) in rows:
+            for (row_id, download_date, model_id, model_name, model_meta, tags_json, version_id, version_name) in rows:
                 try:
                     mmeta = json.loads(model_meta or '{}')
                 except Exception:
                     mmeta = {}
+                
+                # Include tags from database if not already in metadata
+                try:
+                    db_tags = json.loads(tags_json or '[]')
+                    if db_tags and ('tags' not in mmeta or not mmeta['tags']):
+                        mmeta['tags'] = db_tags
+                except Exception:
+                    pass
                 # collect local images for model (prefer) or for version
                 cursor.execute('SELECT local_path FROM images WHERE model_id = ? AND local_path IS NOT NULL ORDER BY position ASC', (model_id,))
                 img_rows = cursor.fetchall()
