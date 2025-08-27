@@ -7,7 +7,11 @@ import hashlib
 import threading
 
 class DatabaseManager:
-    def __init__(self, db_path="civitai_manager.db"):
+    def __init__(self, db_path=None):
+        if db_path is None:
+            # Always use the database in the civitai-manager directory
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            db_path = os.path.join(script_dir, "civitai_manager.db")
         # Set check_same_thread False so we can guard access with our own lock
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
         try:
@@ -314,7 +318,7 @@ class DatabaseManager:
         try:
             cursor = self.conn.cursor()
             cursor.execute('''
-                SELECT d.id, d.download_date,
+                SELECT d.id, d.download_date, d.main_tag,
                        m.model_id, m.name AS model_name, m.metadata AS model_metadata, m.tags,
                        v.version_id, v.name AS version
                 FROM downloads d
@@ -325,7 +329,7 @@ class DatabaseManager:
             ''')
             rows = cursor.fetchall()
             results = []
-            for (row_id, download_date, model_id, model_name, model_meta, tags_json, version_id, version_name) in rows:
+            for (row_id, download_date, main_tag, model_id, model_name, model_meta, tags_json, version_id, version_name) in rows:
                 try:
                     mmeta = json.loads(model_meta or '{}')
                 except Exception:
@@ -351,6 +355,7 @@ class DatabaseManager:
                     'metadata': mmeta,
                     'images': images,
                     'download_date': download_date,
+                    'main_tag': main_tag,
                 })
             return results
         except sqlite3.Error as e:

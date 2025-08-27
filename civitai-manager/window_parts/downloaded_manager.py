@@ -70,10 +70,7 @@ class DownloadedManager:
         except Exception:
             pass
         
-        # Update filter options for downloaded explorer
-        self.setup_downloaded_filters()
-        
-        # Load downloaded models
+        # Load downloaded models first
         try:
             # Disable search pagination
             try:
@@ -85,6 +82,9 @@ class DownloadedManager:
             
             self.load_downloaded_models_left()
             main.status_bar.showMessage("Showing downloaded models")
+            
+            # Update filter options for downloaded explorer (after models are loaded)
+            self.setup_downloaded_filters()
             
             # Try to restore previous model selection if switching from search
             try:
@@ -153,66 +153,29 @@ class DownloadedManager:
             print(f"Error setting up downloaded filters: {e}")
     
     def get_available_tags(self):
-        """Get available tags from downloaded models based on priority."""
+        """Get available main tags from downloaded models in the database."""
         main = self.main_window
         
         try:
-            if not hasattr(main, '_left_agg_downloaded'):
-                print("DEBUG: No _left_agg_downloaded attribute")
-                return []
+            # Get downloaded models to extract unique main tags
+            models = main.db_manager.get_downloaded_models() or []
             
-            print(f"DEBUG: _left_agg_downloaded has {len(main._left_agg_downloaded)} models")
+            # Collect unique main tags from downloaded models
+            main_tags = set()
+            for item in models:
+                main_tag = item.get('main_tag')
+                if main_tag and main_tag.strip():
+                    main_tags.add(main_tag.strip())
             
-            # Get priority tags from settings
-            try:
-                pri_raw = main.settings_manager.get("priority_tags", "") or ""
-                priority_tags = [t.strip() for t in pri_raw.split(',') if t.strip()]
-                if not priority_tags:
-                    priority_tags = ['meme', 'concept', 'character', 'style', 'clothing', 'pose']
-            except Exception:
-                priority_tags = ['meme', 'concept', 'character', 'style', 'clothing', 'pose']
-            
-            # Collect all tags from downloaded models
-            found_tags = set()
-            for k, md in main._left_agg_downloaded.items():
-                print(f"DEBUG: Checking model {k}")
-                print(f"DEBUG: Model data keys: {list(md.keys())}")
-                
-                tags = md.get('tags') or []
-                print(f"DEBUG: Found {len(tags)} tags in model {k}")
-                
-                for tag_item in tags:
-                    if isinstance(tag_item, dict):
-                        tag_name = tag_item.get('name', '').strip().lower()
-                    else:
-                        tag_name = str(tag_item or '').strip().lower()
-                    
-                    if tag_name:
-                        print(f"DEBUG: Adding tag: {tag_name}")
-                        found_tags.add(tag_name)
-            
-            print(f"DEBUG: Total unique tags found: {len(found_tags)}")
-            print(f"DEBUG: Tags: {sorted(found_tags)}")
-            
-            # Return tags in priority order, then alphabetical for others
-            ordered_tags = []
-            for priority_tag in priority_tags:
-                if priority_tag.lower() in found_tags:
-                    ordered_tags.append(priority_tag.title())
-                    found_tags.remove(priority_tag.lower())
-            
-            # Add remaining tags alphabetically
-            remaining_tags = sorted([tag.title() for tag in found_tags])
-            ordered_tags.extend(remaining_tags)
-            
-            print(f"DEBUG: Final ordered tags: {ordered_tags}")
-            return ordered_tags
+            # Convert to sorted list
+            available_tags = sorted(list(main_tags))
+            return available_tags
             
         except Exception as e:
-            print(f"Error getting available tags: {e}")
-            import traceback
-            traceback.print_exc()
-            return []
+            print(f"Error getting main tags from downloaded models: {e}")
+            # Fallback to all MainTag enum values if there's an error
+            from constants import MainTag
+            return [tag.value for tag in MainTag]
     
     def restore_search_filters(self):
         """Restore original filter options when returning to search explorer."""
@@ -281,6 +244,7 @@ class DownloadedManager:
                 md['_db_id'] = item.get('id')
                 md['_downloaded_versions'] = [item.get('version_id')] if item.get('version_id') else []
                 md['_images'] = item.get('images') or []
+                md['main_tag'] = item.get('main_tag')  # Include main_tag from database
                 main._left_agg_downloaded[key] = md
             else:
                 if item.get('version_id'):
@@ -288,6 +252,9 @@ class DownloadedManager:
                 for im in (item.get('images') or []):
                     if im not in main._left_agg_downloaded[key]['_images']:
                         main._left_agg_downloaded[key]['_images'].append(im)
+                # Update main_tag if not already set or if this item has a main_tag
+                if item.get('main_tag') and not main._left_agg_downloaded[key].get('main_tag'):
+                    main._left_agg_downloaded[key]['main_tag'] = item.get('main_tag')
         
         # Create cards from aggregated entries
         missing_map = {}

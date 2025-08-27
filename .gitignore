@@ -210,6 +210,7 @@ _.py
 *.db-wal
 *.db-shm
 test*.py
+debug*.py
 images/*
 *.lnk
 # Marimo

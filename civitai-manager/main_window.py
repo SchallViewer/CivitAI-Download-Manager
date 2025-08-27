@@ -1164,19 +1164,16 @@ class MainWindow(QMainWindow):
             return True
     
     def has_tag(self, model_data, target_tag):
-        """Check if model has the specified tag."""
+        """Check if model has the specified main tag from the database."""
         try:
-            tags = model_data.get('tags') or []
-            target_tag_lower = target_tag.lower()
+            # If target_tag is "All Tags" or empty, return True
+            if not target_tag or target_tag.lower() in ['all tags', 'all']:
+                return True
             
-            for tag_item in tags:
-                if isinstance(tag_item, dict):
-                    tag_name = tag_item.get('name', '').strip().lower()
-                else:
-                    tag_name = str(tag_item or '').strip().lower()
-                
-                if tag_name == target_tag_lower:
-                    return True
+            # Check the main_tag field from the database
+            main_tag = model_data.get('main_tag')
+            if main_tag:
+                return main_tag.lower() == target_tag.lower()
             
             return False
         except Exception:
