@@ -958,26 +958,33 @@ class MainWindow(QMainWindow):
     def handle_filter_change(self):
         """Handle filter changes based on current explorer context."""
         current_view = getattr(self, 'current_left_view', 'search')
+        print(f"DEBUG: handle_filter_change called - current_view: {current_view}")
         if current_view == 'downloaded':
             # In downloaded explorer, filter downloaded models
+            print("DEBUG: Filtering downloaded models")
             self.filter_downloaded_models()
         else:
             # In search explorer, perform API search
+            print("DEBUG: Performing API search")
             self.search_models()
     
     def handle_search_input(self):
         """Handle search input based on current explorer context."""
         current_view = getattr(self, 'current_left_view', 'search')
+        print(f"DEBUG: handle_search_input called - current_view: {current_view}")
         if current_view == 'downloaded':
             # In downloaded explorer, treat as filter (no action needed, textChanged handles it)
+            print("DEBUG: In downloaded explorer - no action needed")
             pass
         else:
             # In search explorer, perform API search
+            print("DEBUG: In search explorer - performing API search")
             self.search_models()
     
     def handle_search_text_changed(self):
         """Handle real-time search text changes with debouncing."""
         current_view = getattr(self, 'current_left_view', 'search')
+        print(f"DEBUG: handle_search_text_changed called - current_view: {current_view}")
         if current_view == 'downloaded':
             # Stop any ongoing progressive rendering
             try:
@@ -992,6 +999,9 @@ class MainWindow(QMainWindow):
             except Exception:
                 # Fallback to immediate filtering if timer fails
                 self.filter_downloaded_models()
+        else:
+            # For search explorer, could add debouncing here too if needed
+            print("DEBUG: In search explorer - text changed (no immediate action)")
     
     def filter_downloaded_models(self):
         """Filter downloaded models by search text and all filter criteria with progressive rendering."""
@@ -2277,6 +2287,7 @@ class MainWindow(QMainWindow):
                 pass
     
     def show_search_panel(self):
+        print("DEBUG: show_search_panel called - switching to search explorer")
         # Save current model selection for restoration
         current_model_id = None
         current_version_id = None
@@ -2290,6 +2301,7 @@ class MainWindow(QMainWindow):
         
         # switch back to search left view
         try:
+            print("DEBUG: Setting current_left_view to 'search'")
             self.current_left_view = 'search'
             self.title_label.setText("Model Explorer")
             # restore primary color background for search mode
@@ -2299,17 +2311,49 @@ class MainWindow(QMainWindow):
         
         # Update search input placeholder
         try:
+            print("DEBUG: Updating search input placeholder")
             self.search_input.setPlaceholderText("Search models...")
         except Exception:
             pass
         
         # Restore search explorer filter options
         try:
+            print("DEBUG: Restoring search filters")
             from window_parts.downloaded_manager import DownloadedManager
             dm = DownloadedManager(self)
             dm.restore_search_filters()
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"DEBUG: Error restoring search filters: {e}")
+        
+        # Re-enable search functionality
+        try:
+            print("DEBUG: Re-enabling search functionality")
+            # Clear any existing search state that might interfere
+            if hasattr(self, 'download_filter_timer'):
+                print("DEBUG: Stopping download_filter_timer")
+                self.download_filter_timer.stop()
+            if hasattr(self, 'progressive_render_timer'):
+                print("DEBUG: Stopping progressive_render_timer")
+                self.progressive_render_timer.stop()
+            
+            # Ensure search input is properly connected
+            try:
+                print("DEBUG: Disconnecting existing search handlers")
+                self.search_input.textChanged.disconnect()
+            except Exception:
+                pass
+            try:
+                self.search_input.returnPressed.disconnect()
+            except Exception:
+                pass
+            
+            # Reconnect search handlers
+            print("DEBUG: Reconnecting search handlers")
+            self.search_input.textChanged.connect(self.handle_search_text_changed)
+            self.search_input.returnPressed.connect(self.handle_search_input)
+            
+        except Exception as e:
+            print(f"Error re-enabling search functionality: {e}")
         
         # ensure download button is visible again when returning to search
         try:
@@ -2576,3 +2620,50 @@ class MainWindow(QMainWindow):
             self.db_manager.clear_history()
             self.history_tree.clear()
             self.status_bar.showMessage("Download history cleared")
+    
+    def closeEvent(self, event):
+        """Handle application close event to ensure proper cleanup."""
+        print("DEBUG: closeEvent called - starting cleanup")
+        try:
+            # Stop all timers
+            if hasattr(self, 'download_filter_timer'):
+                print("DEBUG: Stopping download_filter_timer")
+                self.download_filter_timer.stop()
+            if hasattr(self, 'progressive_render_timer'):
+                print("DEBUG: Stopping progressive_render_timer")
+                self.progressive_render_timer.stop()
+            if hasattr(self, 'search_timer'):
+                print("DEBUG: Stopping search_timer")
+                self.search_timer.stop()
+            
+            # Cancel any running downloads
+            if hasattr(self, 'download_manager'):
+                print("DEBUG: Canceling active downloads")
+                try:
+                    # Cancel all active downloads
+                    for download in self.download_manager.get_active_downloads():
+                        if hasattr(download, 'file_name'):
+                            self.download_manager.cancel_download(download.file_name)
+                    
+                    # Clear thread pool
+                    if hasattr(self.download_manager, 'thread_pool'):
+                        self.download_manager.thread_pool.clear()
+                except Exception as e:
+                    print(f"DEBUG: Error canceling downloads: {e}")
+            
+            # Close database connections
+            if hasattr(self, 'db_manager') and hasattr(self.db_manager, 'conn'):
+                print("DEBUG: Closing database connection")
+                self.db_manager.conn.close()
+            
+            # Hide system tray icon
+            if hasattr(self, 'tray_icon'):
+                print("DEBUG: Hiding system tray icon")
+                self.tray_icon.hide()
+                
+        except Exception as e:
+            print(f"Error during cleanup: {e}")
+        finally:
+            print("DEBUG: closeEvent completed - accepting event")
+            # Accept the close event
+            event.accept()

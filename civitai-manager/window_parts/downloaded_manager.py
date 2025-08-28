@@ -15,10 +15,12 @@ class DownloadedManager:
     
     def show_downloaded_explorer(self):
         """Show downloaded models in the left grid panel."""
+        print("DEBUG: show_downloaded_explorer called - switching to downloaded explorer")
         main = self.main_window
         
         # Record previous view for caching and selection preservation
         prev_view = getattr(main, 'current_left_view', 'search')
+        print(f"DEBUG: Previous view was: {prev_view}")
         
         # Save current model selection for restoration later
         current_model_id = None
@@ -51,12 +53,14 @@ class DownloadedManager:
             pass
         
         # Update current view
+        print("DEBUG: Setting current_left_view to 'downloaded'")
         try:
             main.current_left_view = 'downloaded'
         except Exception:
             main.current_left_view = 'downloaded'
         
         # Update UI appearance
+        print("DEBUG: Updating UI appearance for downloaded mode")
         try:
             main.title_label.setText("Downloaded Models")
             from constants import CARD_BACKGROUND
@@ -65,14 +69,17 @@ class DownloadedManager:
             pass
         
         # Clear search input to avoid confusion (will be used for filtering now)
+        print("DEBUG: Setting search input placeholder for downloaded mode")
         try:
             main.search_input.setPlaceholderText("Filter downloaded models...")
         except Exception:
             pass
         
         # Load downloaded models first
+        print("DEBUG: Loading downloaded models")
         try:
             # Disable search pagination
+            print("DEBUG: Disabling search pagination")
             try:
                 main.model_has_more = False
                 main.search_cursor = None
@@ -80,20 +87,27 @@ class DownloadedManager:
             except Exception:
                 pass
             
+            print("DEBUG: Calling load_downloaded_models_left()")
             self.load_downloaded_models_left()
             main.status_bar.showMessage("Showing downloaded models")
             
             # Update filter options for downloaded explorer (after models are loaded)
+            print("DEBUG: Setting up downloaded filters")
             self.setup_downloaded_filters()
             
             # Try to restore previous model selection if switching from search
+            print("DEBUG: Attempting to restore previous selection")
             try:
                 saved_selection = getattr(main, '_saved_selection', {})
                 if (saved_selection.get('view') == 'search' and 
                     saved_selection.get('model_id')):
                     # Try to find and select the same model in downloaded results
+                    print(f"DEBUG: Restoring selection for model ID: {saved_selection.get('model_id')}")
                     self.restore_downloaded_selection(saved_selection.get('model_id'), saved_selection.get('version_id'))
-            except Exception:
+                else:
+                    print("DEBUG: No previous selection to restore")
+            except Exception as e:
+                print(f"DEBUG: Error restoring selection: {e}")
                 pass
                 
         except Exception as e:
@@ -113,11 +127,13 @@ class DownloadedManager:
     
     def setup_downloaded_filters(self):
         """Configure filter options for downloaded explorer mode."""
+        print("DEBUG: setup_downloaded_filters called")
         main = self.main_window
         
         try:
             # Store original filter states if not already stored
             if not hasattr(main, '_original_filters_saved'):
+                print("DEBUG: Saving original filter states")
                 main._original_sort_items = []
                 main._original_period_items = []
                 
@@ -135,19 +151,45 @@ class DownloadedManager:
                 
                 main._original_filters_saved = True
             
+            # Temporarily disconnect signals to prevent triggering searches during setup
+            print("DEBUG: Temporarily disconnecting filter signals for setup")
+            try:
+                main.sort_combo.currentIndexChanged.disconnect()
+                main.period_combo.currentIndexChanged.disconnect()
+            except:
+                pass
+            
+            # Hide NSFW checkbox for downloaded explorer
+            print("DEBUG: Hiding NSFW checkbox for downloaded explorer")
+            if hasattr(main, 'nsfw_checkbox'):
+                main.nsfw_checkbox.setVisible(False)
+                print("DEBUG: NSFW checkbox hidden successfully")
+            
             # Update sort combo for downloaded explorer
+            print("DEBUG: Updating sort combo for downloaded explorer")
             main.sort_combo.clear()
             main.sort_combo.addItem("Newest", "newest")
             main.sort_combo.addItem("Title Name", "title")
             
             # Update period combo to show available tags
+            print("DEBUG: Updating period combo with available tags")
             main.period_combo.clear()
             main.period_combo.addItem("All Tags", None)
             
             # Collect available tags from downloaded models
+            print("DEBUG: Collecting available tags from downloaded models")
             available_tags = self.get_available_tags()
+            print(f"DEBUG: Found {len(available_tags)} available tags")
             for tag in available_tags:
                 main.period_combo.addItem(tag, tag.lower())
+            
+            # Reconnect signals after setup
+            print("DEBUG: Reconnecting filter signals after setup")
+            try:
+                main.sort_combo.currentIndexChanged.connect(main.handle_filter_change)
+                main.period_combo.currentIndexChanged.connect(main.handle_filter_change)
+            except:
+                pass
                 
         except Exception as e:
             print(f"Error setting up downloaded filters: {e}")
@@ -179,22 +221,50 @@ class DownloadedManager:
     
     def restore_search_filters(self):
         """Restore original filter options when returning to search explorer."""
+        print("DEBUG: restore_search_filters called")
         main = self.main_window
         
         try:
             if hasattr(main, '_original_filters_saved'):
+                print("DEBUG: Restoring original filters from saved state")
+                
+                # Temporarily disconnect signals to prevent triggering searches during restore
+                print("DEBUG: Temporarily disconnecting filter signals")
+                try:
+                    main.sort_combo.currentIndexChanged.disconnect()
+                    main.period_combo.currentIndexChanged.disconnect()
+                except:
+                    pass
+                
+                # Show NSFW checkbox for search explorer
+                print("DEBUG: Showing NSFW checkbox for search explorer")
+                if hasattr(main, 'nsfw_checkbox'):
+                    main.nsfw_checkbox.setVisible(True)
+                    print("DEBUG: NSFW checkbox shown successfully")
+                
                 # Restore sort combo
+                print("DEBUG: Restoring sort combo")
                 main.sort_combo.clear()
                 for text, data in main._original_sort_items:
                     main.sort_combo.addItem(text, data)
                 
                 # Restore period combo
+                print("DEBUG: Restoring period combo")
                 main.period_combo.clear()
                 for text, data in main._original_period_items:
                     main.period_combo.addItem(text, data)
+                
+                # Reconnect signals after restore
+                print("DEBUG: Reconnecting filter signals")
+                try:
+                    main.sort_combo.currentIndexChanged.connect(main.handle_filter_change)
+                    main.period_combo.currentIndexChanged.connect(main.handle_filter_change)
+                except:
+                    pass
                     
         except Exception as e:
             print(f"Error restoring search filters: {e}")
+            print(f"DEBUG: Exception details: {e}")
     
     def load_downloaded_models_left(self):
         """Load downloaded models into the left-hand model grid."""
