@@ -48,6 +48,7 @@ from window_parts.model_utils import ModelDataUtils
 from window_parts.search_manager import SearchManager
 from window_parts.downloaded_manager import DownloadedManager
 from window_parts.download_handler import DownloadHandler
+from managers.notification_manager import NotificationManager
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -55,7 +56,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Civitai Download Manager")
         self.setGeometry(100, 100, 1200, 800)
         self.setMinimumSize(1000, 700)
-        
+
         # Apply Civitai color palette
         palette = self.palette()
         palette.setColor(QPalette.Window, BACKGROUND_COLOR)
@@ -71,138 +72,101 @@ class MainWindow(QMainWindow):
         palette.setColor(QPalette.Highlight, PRIMARY_COLOR)
         palette.setColor(QPalette.HighlightedText, TEXT_COLOR)
         self.setPalette(palette)
-        
-        # Initialize managers and utilities
+
+        # Managers & utilities
         self.utils = ModelDataUtils()
         self.search_manager = SearchManager(self)
         self.downloaded_manager = DownloadedManager(self)
         self.download_handler = DownloadHandler(self)
-        
-        # Initialize modules
+
+        # Core modules
         self.settings_manager = SettingsManager()
         self.db_manager = DatabaseManager()
         self.api_key = self.settings_manager.get("api_key")
         self.api = CivitaiAPI(api_key=self.api_key)
         self.download_manager = DownloadManager(self.db_manager)
-        # subscribe to download manager changes so UI can refresh
+        self.notification_manager = NotificationManager(self)
+
+        # Connect download manager signals
         try:
-            self.download_manager.downloads_changed.connect(self.update_downloads_panel)
-            self.download_manager.download_started.connect(self._notify_download_started)
-            self.download_manager.download_queued.connect(self._notify_download_queued)
-            self.download_manager.download_file_completed.connect(self._notify_download_file_completed)
-            self.download_manager.download_gathering_images.connect(self._notify_download_gathering_images)
-            self.download_manager.download_fully_completed.connect(self._notify_download_fully_completed)
-            # show noticeable message boxes when a download is started or queued
+            dm = self.download_manager
+            dm.downloads_changed.connect(self.update_downloads_panel)
+            dm.download_started.connect(self._notify_download_started)
+            dm.download_queued.connect(self._notify_download_queued)
+            dm.download_file_completed.connect(self._notify_download_file_completed)
+            dm.download_gathering_images.connect(self._notify_download_gathering_images)
+            dm.download_fully_completed.connect(self._notify_download_fully_completed)
             try:
-                self.download_manager.download_started.connect(self._modal_download_started)
-                self.download_manager.download_queued.connect(self._modal_download_queued)
+                dm.download_started.connect(self._modal_download_started)
+                dm.download_queued.connect(self._modal_download_queued)
             except Exception:
                 pass
         except Exception:
             pass
+
+        # State variables
         self.current_model = None
         self.current_version = None
         self.image_loader_threads = []
         self.download_tasks = {}
-        # track attempted image URLs per card/target to avoid infinite retries
         self.card_image_attempts = {}
         self.details_image_attempts = set()
-        # details panel carousel state
         self.details_images_urls = []
         self.details_image_index = 0
-        self.model_page = 1
+        # Pagination state for search results
+        self.model_page = 0
+        self.search_cursor = None
         self.model_has_more = True
-        # cache last search metadata (list of model_data dicts)
         self._search_cache = []
 
-        # Setup UI
+        # Build UI & connections
         self.init_ui()
         self.init_connections()
 
-        # Load initial data only if user enabled auto-load in settings
+        # Auto-load popular models if enabled
         try:
             if self.settings_manager.get("auto_load_popular", False):
                 self.load_popular_models()
         except Exception:
-            # keep conservative default: do not auto-load models
             pass
 
-        # Check API key and show warning if needed
+        # API key warning
         if not self.api_key:
             QTimer.singleShot(500, self.show_api_key_warning)
-        
-        # Create a tray icon for notifications
+
+        # System tray
         try:
             self.tray = QSystemTrayIcon(self)
-            # Try to reuse app icon if available
-            app_icon = QIcon()
             try:
                 app_icon = self.windowIcon() or QIcon()
             except Exception:
-                pass
-            if not app_icon.isNull():
-                self.tray.setIcon(app_icon)
-            else:
-                self.tray.setIcon(QIcon())
+                app_icon = QIcon()
+            self.tray.setIcon(app_icon if not app_icon.isNull() else QIcon())
             self.tray.setVisible(True)
         except Exception:
             self.tray = None
 
+    # Delegated notification methods
     def _notify_download_started(self, file_name: str):
-        try:
-            msg = f"Downloading: {file_name}"
-            self.status_bar.showMessage(msg, 5000)
-            if getattr(self, 'tray', None) and isinstance(self.tray, QSystemTrayIcon):
-                self.tray.showMessage("Civitai Manager", msg, QSystemTrayIcon.Information, 5000)
-        except Exception:
-            pass
+        self.notification_manager.notify_download_started(file_name)
 
     def _notify_download_queued(self, file_name: str):
-        try:
-            msg = f"Queued: {file_name} (waiting for a free slot)"
-            self.status_bar.showMessage(msg, 5000)
-            if getattr(self, 'tray', None) and isinstance(self.tray, QSystemTrayIcon):
-                self.tray.showMessage("Civitai Manager", msg, QSystemTrayIcon.Information, 5000)
-        except Exception:
-            pass
+        self.notification_manager.notify_download_queued(file_name)
 
     def _modal_download_started(self, file_name: str):
-        try:
-            # Non-blocking information dialog that is still clearly visible
-            QMessageBox.information(self, "Download Started", f"The model file is now downloading:\n\n{file_name}", QMessageBox.Ok)
-        except Exception:
-            pass
+        self.notification_manager.show_modal_download_started(file_name)
 
     def _modal_download_queued(self, file_name: str):
-        try:
-            QMessageBox.information(self, "Download Queued", f"The model file was queued and will start when a slot is free:\n\n{file_name}", QMessageBox.Ok)
-        except Exception:
-            pass
+        self.notification_manager.show_modal_download_queued(file_name)
 
     def _notify_download_file_completed(self, file_name: str):
-        try:
-            msg = f"Model downloaded: {file_name} - Now gathering images..."
-            self.status_bar.showMessage(msg, 8000)
-            if getattr(self, 'tray', None) and isinstance(self.tray, QSystemTrayIcon):
-                self.tray.showMessage("Civitai Manager", f"Model downloaded: {file_name}", QSystemTrayIcon.Information, 5000)
-        except Exception:
-            pass
+        self.notification_manager.notify_download_file_completed(file_name)
 
     def _notify_download_gathering_images(self, file_name: str):
-        try:
-            msg = f"Gathering images for: {file_name}..."
-            self.status_bar.showMessage(msg, 10000)
-        except Exception:
-            pass
+        self.notification_manager.notify_download_gathering_images(file_name)
 
     def _notify_download_fully_completed(self, file_name: str):
-        try:
-            msg = f"Download completed: {file_name}"
-            self.status_bar.showMessage(msg, 8000)
-            if getattr(self, 'tray', None) and isinstance(self.tray, QSystemTrayIcon):
-                self.tray.showMessage("Civitai Manager", f"Download completed: {file_name}", QSystemTrayIcon.Information, 5000)
-        except Exception:
-            pass
+        self.notification_manager.notify_download_fully_completed(file_name)
     
     def init_ui(self):
         # Create main central widget
@@ -430,8 +394,15 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
-        # Show welcome panel initially
-        self.right_panel.setCurrentIndex(3)
+        # Show welcome panel initially (last added widget)
+        try:
+            welcome_idx = self.right_panel.indexOf(self.welcome_panel)
+            # Debug: list panel widgets
+            # print("DEBUG: right_panel count:", self.right_panel.count(), "welcome_idx:", welcome_idx)
+            if welcome_idx != -1:
+                self.right_panel.setCurrentIndex(welcome_idx)
+        except Exception as e:
+            print("DEBUG: Error selecting welcome panel:", e)
 
     def _extract_image_url(self, model):
         """Delegate to utility class."""
@@ -496,10 +467,10 @@ class MainWindow(QMainWindow):
         
         # Info text
         info_label = QLabel(
-            "Welcome to the Civitai Download Manager!\n\n"
-            "To get started, search for models on the left panel or click below to\n"
-            "see the most popular models this week.\n\n"
-            "You can configure your API key and download settings using the gear icon."
+            "CivitAI Manager!\n\n"
+            "Use the buttons in the toolbar to navegate through panels.\n"
+            "You can start by configure your API key and download settings.\n\n"
+            "See the most popular models this week."
         )
         info_label.setFont(QFont("Segoe UI", 12))
         info_label.setStyleSheet(f"color: {TEXT_COLOR.name()}; margin-bottom: 30px;")
@@ -508,7 +479,7 @@ class MainWindow(QMainWindow):
         
         # Popular models button
         popular_btn = QPushButton("Show Popular Models")
-        popular_btn.setFont(QFont("Segoe UI", 12))
+        popular_btn.setFont(QFont("Segoe UI", 11))
         popular_btn.setStyleSheet(f"""
             QPushButton {{
                 background-color: {PRIMARY_COLOR.name()};
@@ -830,11 +801,14 @@ class MainWindow(QMainWindow):
     def init_connections(self):
         self.search_action.triggered.connect(self.show_search_panel)
         self.downloads_action.triggered.connect(self.show_downloads_panel)
+        try:
+            self.downloaded_explorer_action.triggered.connect(self.show_downloaded_explorer)
+        except Exception:
+            pass
         self.history_action.triggered.connect(self.show_history_panel)
         self.settings_action.triggered.connect(self.open_settings)
         self.search_input.returnPressed.connect(self.handle_search_input)
-        # Add debounced live search for downloaded explorer to prevent UI freezes
-        self.search_input.textChanged.connect(self.handle_search_text_changed)
+    # NOTE: Do NOT connect textChanged here; live search only active in downloaded explorer
         
         # Create debounce timer for downloaded filtering
         self.download_filter_timer = QTimer()
@@ -2346,10 +2320,18 @@ class MainWindow(QMainWindow):
                 self.search_input.returnPressed.disconnect()
             except Exception:
                 pass
+
+            # Mark that downloaded live search can be reconnected next time
+            try:
+                if getattr(self, '_downloaded_live_search_connected', False):
+                    print("DEBUG: Resetting _downloaded_live_search_connected flag")
+                    self._downloaded_live_search_connected = False
+            except Exception:
+                pass
             
             # Reconnect search handlers
-            print("DEBUG: Reconnecting search handlers")
-            self.search_input.textChanged.connect(self.handle_search_text_changed)
+            # Reconnect only returnPressed (API search on enter). Keep textChanged disconnected in search mode.
+            print("DEBUG: Reconnecting returnPressed handler only (no live search in API mode)")
             self.search_input.returnPressed.connect(self.handle_search_input)
             
         except Exception as e:

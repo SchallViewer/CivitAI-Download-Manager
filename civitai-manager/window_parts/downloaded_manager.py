@@ -74,6 +74,17 @@ class DownloadedManager:
             main.search_input.setPlaceholderText("Filter downloaded models...")
         except Exception:
             pass
+
+        # Connect live filtering (textChanged) only in downloaded explorer
+        try:
+            if not getattr(main, '_downloaded_live_search_connected', False):
+                print("DEBUG: Connecting live downloaded explorer filter (textChanged)")
+                main.search_input.textChanged.connect(main.handle_search_text_changed)
+                main._downloaded_live_search_connected = True
+            else:
+                print("DEBUG: Live filter already connected")
+        except Exception as e:
+            print(f"DEBUG: Failed to connect live filter: {e}")
         
         # Load downloaded models first
         print("DEBUG: Loading downloaded models")
