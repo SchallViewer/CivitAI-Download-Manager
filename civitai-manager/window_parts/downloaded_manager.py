@@ -337,40 +337,31 @@ class DownloadedManager:
                 if item.get('main_tag') and not main._left_agg_downloaded[key].get('main_tag'):
                     main._left_agg_downloaded[key]['main_tag'] = item.get('main_tag')
         
-        # Create cards from aggregated entries
-        missing_map = {}
-        try:
-            if hasattr(main, 'db_manager'):
-                missing_map = main.db_manager.get_missing_status_map() or {}
-        except Exception:
-            missing_map = {}
+        # Use progressive rendering for better performance
+        models_list = [(k, md) for k, md in main._left_agg_downloaded.items()]
         
-        for k, md in main._left_agg_downloaded.items():
-            card = ModelCard(md)
-            card.clicked.connect(main.show_downloaded_model_details)
-            
-            # Set local image if available
-            imgs = md.get('_images') or []
-            if imgs:
-                try:
-                    pix = QPixmap(imgs[0])
-                    if not pix.isNull():
-                        card.set_image(pix)
-                except Exception:
-                    pass
-            
-            # Highlight if Missing
-            try:
-                mid = md.get('id') or md.get('model_id') or md.get('_db_id')
-                if mid in missing_map:
-                    card.setStyleSheet(card.styleSheet() + '\nModelCard { background-color: #664; border: 2px solid #ffeb3b; }')
-            except Exception:
-                pass
-            
-            main.model_cards.append(card)
+        # Sort by default criteria (newest first) 
+        models_list = main.sort_downloaded_models(models_list, "newest")
         
-        # Layout cards in grid
-        main.relayout_model_cards()
+        # Set up progressive rendering
+        main.filtered_models_queue = models_list
+        main.render_batch_size = 6
+        main.rendered_count = 0
+        
+        # Update status immediately
+        total_count = len(models_list)
+        main.status_bar.showMessage(f"Loading {total_count} downloaded models...")
+        
+        # Start progressive rendering
+        if models_list:
+            if len(models_list) <= 12:
+                # Render small collections immediately
+                main.render_all_immediately(models_list)
+            else:
+                # Use progressive rendering for large collections
+                main.progressive_render_timer.start(16)
+        else:
+            main.status_bar.showMessage("No downloaded models found")
     
     def restore_downloaded_selection(self, target_model_id, target_version_id=None):
         """Try to restore model selection in downloaded explorer."""
