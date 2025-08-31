@@ -309,23 +309,43 @@ class DownloadTask(QRunnable):
             file_size = total_size
             
             os.makedirs(os.path.dirname(self.save_path), exist_ok=True)
-            with open(self.save_path, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    if self.is_cancelled:
-                        print(f"DownloadTask.run: cancelled '{self.file_name}', removing partial file")
-                        try:
-                            os.remove(self.save_path)
-                        except Exception:
-                            pass
-                        return
-                    
-                    f.write(chunk)
-                    downloaded += len(chunk)
-                    progress = int((downloaded / total_size) * 100) if total_size > 0 else 0
-                    self.signals.progress.emit(self.file_name, downloaded, total_size)
+            
+            try:
+                with open(self.save_path, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if self.is_cancelled:
+                            print(f"DownloadTask.run: cancelled '{self.file_name}', removing partial file")
+                            f.close()  # Close file before attempting to remove it
+                            try:
+                                os.remove(self.save_path)
+                                print(f"DownloadTask.run: successfully removed partial file '{self.save_path}'")
+                            except Exception as e:
+                                print(f"DownloadTask.run: failed to remove partial file '{self.save_path}': {e}")
+                            return
+                        
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        progress = int((downloaded / total_size) * 100) if total_size > 0 else 0
+                        self.signals.progress.emit(self.file_name, downloaded, total_size)
+            except Exception as e:
+                # If any error occurs during download, clean up partial file
+                try:
+                    if os.path.exists(self.save_path):
+                        os.remove(self.save_path)
+                        print(f"DownloadTask.run: cleaned up partial file after error: '{self.save_path}'")
+                except Exception:
+                    pass
+                raise e  # Re-raise the original exception
             
             self.signals.completed.emit(self.file_name, self.save_path, file_size / 1024 / 1024)
         except Exception as e:
+            # Ensure partial file cleanup on any error
+            try:
+                if hasattr(self, 'save_path') and os.path.exists(self.save_path):
+                    os.remove(self.save_path)
+                    print(f"DownloadTask.run: cleaned up partial file after exception: '{self.save_path}'")
+            except Exception:
+                pass
             self.signals.error.emit(self.file_name, str(e))
     
     def cancel(self):
@@ -439,6 +459,25 @@ class DownloadManager(QObject):
     def cancel_download(self, file_name):
         if file_name in self.download_tasks:
             task = self.download_tasks[file_name]
+            
+            # Record cancellation in database before cleanup
+            try:
+                if hasattr(self, 'db_manager') and task.model_data and task.version:
+                    # Log cancellation as "Failed" in database
+                    self.db_manager.record_download(
+                        task.model_data,
+                        task.version,
+                        task.save_path or '',
+                        0,
+                        status="Failed",
+                        original_file_name=getattr(task, 'original_file_name', None),
+                        file_sha256=getattr(task, 'file_sha256', None),
+                        primary_tag=getattr(task, 'primary_tag', None)
+                    )
+                    _append_log(f"cancel_download: recorded cancellation for '{file_name}' as Failed")
+            except Exception as e:
+                _append_log(f"cancel_download: failed to record cancellation for '{file_name}': {e}")
+            
             # request cancellation on the runnable
             try:
                 task.cancel()

@@ -217,5 +217,5 @@ images/*
 marimo/_static/
 marimo/_lsp/
 __marimo__/
-
+/test*.py
 images/
