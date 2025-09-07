@@ -219,10 +219,10 @@ class SettingsDialog(QDialog):
         history_section.setStyleSheet(f"color: {PRIMARY_COLOR.name()}; margin-top: 20px; margin-bottom: 10px;")
         layout.addWidget(history_section)
         
-        # Export/Import History
+        # History Management actions (single recovery button)
         history_layout = QHBoxLayout()
-        export_button = QPushButton("Export History")
-        export_button.setStyleSheet(f"""
+        recover_button = QPushButton("Recover Models Data")
+        recover_button.setStyleSheet(f"""
             QPushButton {{
                 background-color: {PRIMARY_COLOR.name()};
                 color: white;
@@ -234,23 +234,10 @@ class SettingsDialog(QDialog):
                 background-color: #9575cd;
             }}
         """)
-        export_button.clicked.connect(self.export_history)
-        import_button = QPushButton("Import History")
-        import_button.setStyleSheet(f"""
-            QPushButton {{
-                background-color: #333;
-                color: #ddd;
-                padding: 10px;
-                border-radius: 4px;
-                font-weight: bold;
-            }}
-            QPushButton:hover {{
-                background-color: #444;
-            }}
-        """)
-        import_button.clicked.connect(self.import_history)
-        history_layout.addWidget(export_button)
-        history_layout.addWidget(import_button)
+        # Placeholder: no logic yet, only UI wiring
+        recover_button.clicked.connect(self.recover_models_data)
+        history_layout.addWidget(recover_button)
+        history_layout.addStretch()
         layout.addLayout(history_layout)
         
         # Dialog buttons
@@ -291,6 +278,87 @@ class SettingsDialog(QDialog):
     def import_history(self):
         # Implementation to import history
         pass
+
+    def recover_models_data(self):
+        """Start the model recovery process"""
+        from PyQt5.QtWidgets import QMessageBox
+        from model_recovery import ModelRecoveryManager
+        
+        # Show information dialog before starting recovery
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Model Recovery Process")
+        msg.setIcon(QMessageBox.Information)
+        
+        # Set the main message
+        msg.setText("Model Recovery Process")
+        
+        # Set detailed information
+        detailed_info = """
+<b>What this process does:</b>
+• Scans your download folder for model files (.safetensors, .ckpt, .pt, .pth, .bin)
+• Calculates SHA256 hash for each file to identify it uniquely
+• Queries CivitAI database using the hash to recover metadata
+• Downloads preview images and stores them in workspace/images folder
+• Saves all recovered data to the local database
+
+<b>What data will be recovered:</b>
+• Model name, type, creator, and description
+• Version information and trained words/trigger keywords
+• Preview images (up to 5 per model)
+• Tags, base model information, and publishing dates
+
+<b>Important considerations:</b>
+• <b>Processing time:</b> Large collections may take considerable time to process
+• <b>API rate limiting:</b> Requests are throttled to avoid overloading CivitAI servers
+• <b>Internet required:</b> Active connection needed for API queries and image downloads
+• <b>Testing mode:</b> You can rollback all changes after completion for testing
+• <b>Safe operation:</b> Only adds data, does not modify or move your model files
+
+<b>Files that will be skipped:</b>
+• Models already registered in the database
+• Files that cannot be found in CivitAI's database
+• Duplicate files (same hash)
+
+Do you want to start the model recovery process?
+        """
+        
+        msg.setDetailedText(detailed_info.strip())
+        msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+        msg.setDefaultButton(QMessageBox.No)
+        
+        # Style the message box
+        msg.setStyleSheet(f"""
+            QMessageBox {{
+                background-color: {BACKGROUND_COLOR.name()};
+                color: {TEXT_COLOR.name()};
+            }}
+            QMessageBox QLabel {{
+                color: {TEXT_COLOR.name()};
+            }}
+            QPushButton {{
+                background-color: {PRIMARY_COLOR.name()};
+                color: white;
+                padding: 8px 16px;
+                border-radius: 4px;
+                font-weight: bold;
+                min-width: 80px;
+            }}
+            QPushButton:hover {{
+                background-color: #9575cd;
+            }}
+        """)
+        
+        # Show the dialog and check user's choice
+        reply = msg.exec_()
+        
+        if reply == QMessageBox.Yes:
+            # User confirmed, start the recovery process
+            recovery_manager = ModelRecoveryManager(self.parent())
+            recovery_manager.start_recovery()
+            
+            # Close settings dialog after starting recovery
+            self.accept()
+        # If user clicked No, do nothing and stay in settings dialog
     
     def save_settings(self):
         self.settings_manager.set("api_key", self.api_key_input.text())
