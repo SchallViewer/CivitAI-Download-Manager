@@ -284,6 +284,26 @@ class MainWindow(QMainWindow):
             QComboBox::drop-down {{
                 border: none;
             }}
+            QComboBox QAbstractItemView {{
+                background-color: {CARD_BACKGROUND.name()};
+                color: {TEXT_COLOR.name()};
+                border: 1px solid {PRIMARY_COLOR.name()};
+                selection-background-color: {PRIMARY_COLOR.name()};
+                selection-color: {TEXT_COLOR.name()};
+                outline: none;
+            }}
+            QComboBox QAbstractItemView::item {{
+                padding: 8px;
+                border-bottom: 1px solid {BACKGROUND_COLOR.name()};
+            }}
+            QComboBox QAbstractItemView::item:hover {{
+                background-color: {PRIMARY_COLOR.name()};
+                color: {TEXT_COLOR.name()};
+            }}
+            QComboBox QAbstractItemView::item:selected {{
+                background-color: {PRIMARY_COLOR.name()};
+                color: {TEXT_COLOR.name()};
+            }}
         """
 
         self.model_type_combo.setStyleSheet(combo_style)
