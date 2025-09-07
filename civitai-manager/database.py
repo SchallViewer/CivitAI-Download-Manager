@@ -964,3 +964,160 @@ class DatabaseManager:
                 return cur.fetchone() is not None
         except Exception:
             return False
+
+    def store_model(self, model_data, auto_commit=True):
+        """Store model metadata in the database"""
+        try:
+            with self._lock:
+                cursor = self.conn.cursor()
+                model_id = model_data.get('id')
+                if not model_id:
+                    return False
+                
+                # Build model URL
+                model_url = f"https://civitai.com/models/{model_id}"
+                
+                cursor.execute('''
+                    INSERT INTO models (model_id, name, type, base_model, creator, url, description, tags, published_at, updated_at, metadata)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(model_id) DO UPDATE SET
+                        name=excluded.name,
+                        type=excluded.type,
+                        base_model=excluded.base_model,
+                        creator=excluded.creator,
+                        url=excluded.url,
+                        description=excluded.description,
+                        tags=excluded.tags,
+                        published_at=excluded.published_at,
+                        updated_at=excluded.updated_at,
+                        metadata=excluded.metadata
+                ''', (
+                    model_id,
+                    model_data.get('name', 'Unknown'),
+                    model_data.get('type'),
+                    model_data.get('baseModel') or model_data.get('base_model'),
+                    (model_data.get('creator') or {}).get('username') if isinstance(model_data.get('creator'), dict) else str(model_data.get('creator') or ''),
+                    model_url,
+                    model_data.get('description'),
+                    json.dumps(model_data.get('tags', [])),
+                    model_data.get('publishedAt') or model_data.get('createdAt') or model_data.get('created_at') or model_data.get('published_at'),
+                    model_data.get('updatedAt') or model_data.get('updated_at'),
+                    json.dumps(model_data)
+                ))
+                if auto_commit:
+                    self.conn.commit()
+                return True
+        except Exception as e:
+            print(f"Error storing model: {e}")
+            return False
+
+    def store_version(self, version_data, auto_commit=True):
+        """Store version metadata in the database"""
+        try:
+            with self._lock:
+                cursor = self.conn.cursor()
+                version_id = version_data.get('id')
+                model_id = version_data.get('modelId') or (version_data.get('model') or {}).get('id')
+                
+                if not version_id or not model_id:
+                    return False
+                
+                cursor.execute('''
+                    INSERT INTO versions (version_id, model_id, name, base_model, published_at, updated_at, trained_words, metadata)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(version_id) DO UPDATE SET
+                        model_id=excluded.model_id,
+                        name=excluded.name,
+                        base_model=excluded.base_model,
+                        published_at=excluded.published_at,
+                        updated_at=excluded.updated_at,
+                        trained_words=excluded.trained_words,
+                        metadata=excluded.metadata
+                ''', (
+                    version_id,
+                    model_id,
+                    version_data.get('name', 'Unknown'),
+                    version_data.get('baseModel') or version_data.get('base_model'),
+                    version_data.get('publishedAt') or version_data.get('createdAt') or version_data.get('created_at') or version_data.get('published_at'),
+                    version_data.get('updatedAt') or version_data.get('updated_at'),
+                    json.dumps(version_data.get('trainedWords') or []),
+                    json.dumps(version_data)
+                ))
+                if auto_commit:
+                    self.conn.commit()
+                return True
+        except Exception as e:
+            print(f"Error storing version: {e}")
+            return False
+
+    def store_image(self, model_id, version_id, url, local_path, position=0, nsfw=False, width=None, height=None, is_gif=False, auto_commit=True):
+        """Store image metadata in the database"""
+        try:
+            with self._lock:
+                cursor = self.conn.cursor()
+                
+                # Check which columns exist in the images table
+                cursor.execute("PRAGMA table_info(images)")
+                columns_info = cursor.fetchall()
+                available_columns = [col[1] for col in columns_info]  # col[1] is the column name
+                
+                # Build query based on available columns
+                base_columns = ['model_id', 'version_id', 'url', 'local_path', 'position', 'is_gif']
+                values = [model_id, version_id, url, local_path, position, int(is_gif)]
+                
+                # Only add optional columns if they exist in the table
+                if 'nsfw' in available_columns:
+                    base_columns.append('nsfw')
+                    values.append(int(nsfw))
+                if 'width' in available_columns and width is not None:
+                    base_columns.append('width')
+                    values.append(width)
+                if 'height' in available_columns and height is not None:
+                    base_columns.append('height')
+                    values.append(height)
+                
+                # Create the query
+                placeholders = ', '.join(['?'] * len(values))
+                columns_str = ', '.join(base_columns)
+                
+                cursor.execute(f'''
+                    INSERT OR REPLACE INTO images ({columns_str})
+                    VALUES ({placeholders})
+                ''', values)
+                
+                if auto_commit:
+                    self.conn.commit()
+                return True
+        except Exception as e:
+            print(f"Error storing image: {e}")
+            return False
+
+    def begin_transaction(self):
+        """Begin a database transaction"""
+        try:
+            with self._lock:
+                self.conn.execute('BEGIN IMMEDIATE')
+                return True
+        except Exception as e:
+            print(f"Error beginning transaction: {e}")
+            return False
+
+    def commit_transaction(self):
+        """Commit the current transaction"""
+        try:
+            with self._lock:
+                self.conn.commit()
+                return True
+        except Exception as e:
+            print(f"Error committing transaction: {e}")
+            return False
+
+    def rollback_transaction(self):
+        """Rollback the current transaction"""
+        try:
+            with self._lock:
+                self.conn.rollback()
+                return True
+        except Exception as e:
+            print(f"Error rolling back transaction: {e}")
+            return False
