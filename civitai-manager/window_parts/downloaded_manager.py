@@ -75,6 +75,18 @@ class DownloadedManager:
         except Exception:
             pass
 
+        # Update UI element visibility for downloaded explorer mode
+        print("DEBUG: Updating UI element visibility for downloaded mode")
+        try:
+            # Hide custom tags input, show filename display
+            main.custom_tags_input.setVisible(False)
+            main.downloaded_filename_group.setVisible(True)
+            # Show downloaded explorer specific buttons (disabled until version selected)
+            main.show_in_folder_btn.setVisible(True)
+            main.show_in_folder_btn.setEnabled(False)
+        except Exception as e:
+            print(f"DEBUG: Error updating UI visibility: {e}")
+
         # Connect live filtering (textChanged) only in downloaded explorer
         try:
             if not getattr(main, '_downloaded_live_search_connected', False):

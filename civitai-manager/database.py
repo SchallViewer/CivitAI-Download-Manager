@@ -214,7 +214,7 @@ class DatabaseManager:
         try:
             cursor = self.conn.cursor()
             cursor.execute('''
-                SELECT d.download_date,
+                SELECT d.download_date, d.file_path,
                        m.model_id, m.name AS model_name, m.type AS model_type, m.url AS model_url, m.metadata AS model_metadata,
                        v.version_id, v.name AS version, v.metadata AS version_metadata
                 FROM downloads d
@@ -226,7 +226,7 @@ class DatabaseManager:
             row = cursor.fetchone()
             if not row:
                 return None
-            (download_date, mid, model_name, model_type, model_url, model_meta, vid, version_name, version_meta) = row
+            (download_date, file_path, mid, model_name, model_type, model_url, model_meta, vid, version_name, version_meta) = row
             try:
                 mmeta = json.loads(model_meta or '{}')
             except Exception:
@@ -240,6 +240,7 @@ class DatabaseManager:
             imgs = [r[0] for r in cursor.fetchall() if r and r[0]]
             return {
                 'download_date': download_date,
+                'file_path': file_path,
                 'model_id': mid,
                 'model_name': model_name,
                 'model_type': model_type,

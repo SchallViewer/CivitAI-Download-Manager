@@ -9,7 +9,7 @@ try:
 except Exception:
     PILImage = None
 
-MAX_IMAGE_AREA = 700_000  # ~1.1 MP cap
+MAX_IMAGE_AREA = 120_000  # ~1.1 MP cap // Reduced to 100 KP
 
 def _process_and_write_image_bytes(content: bytes, dest_path: str, ext: str) -> None:
     """Resize if larger than MAX_IMAGE_AREA and strip metadata, saving back to dest_path.

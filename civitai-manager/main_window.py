@@ -1740,6 +1740,27 @@ class MainWindow(QMainWindow):
             pass
         self.download_btn.setEnabled(False)
 
+        # Manage UI element visibility based on explorer mode
+        current_view = getattr(self, 'current_left_view', 'search')
+        is_downloaded_mode = current_view == 'downloaded'
+        
+        # Show/hide custom tags input vs filename display
+        try:
+            self.custom_tags_input.setVisible(not is_downloaded_mode)
+            self.downloaded_filename_group.setVisible(is_downloaded_mode)
+            if not is_downloaded_mode:
+                # Clear custom tags when switching to search mode
+                self.custom_tags_input.clear()
+        except Exception:
+            pass
+        
+        # Show/hide downloaded explorer specific buttons
+        try:
+            self.show_in_folder_btn.setVisible(is_downloaded_mode)
+            self.show_in_folder_btn.setEnabled(False)  # Will be enabled when version selected
+        except Exception:
+            pass
+
     def _collect_details_images(self, model_data, max_images=5):
         """Return a list of up to max_images image URLs to show in the details carousel.
         Prefer model-level gallery images, then version images, skipping videos and duplicates.
@@ -1922,6 +1943,11 @@ class MainWindow(QMainWindow):
             else:
                 self.trigger_words.setText("No trigger words available")
             
+            # Update filename display and show in folder button for downloaded explorer
+            current_view = getattr(self, 'current_left_view', 'search')
+            if current_view == 'downloaded':
+                self.update_downloaded_filename_display(version)
+            
             # Security: detect unsafe PickleTensor (.pt/.pth) model files for this version
             unsafe = False
             try:
@@ -2028,6 +2054,119 @@ class MainWindow(QMainWindow):
             if model_id:
                 url = f"https://civitai.com/models/{model_id}"
                 QDesktopServices.openUrl(QUrl(url))
+    
+    def update_downloaded_filename_display(self, version):
+        """Update the filename display for the selected version in downloaded explorer mode."""
+        try:
+            if not hasattr(self, 'downloaded_filename_label'):
+                return
+            
+            # Get model and version IDs
+            model_id = (self.current_model or {}).get('id') or (self.current_model or {}).get('model_id')
+            version_id = version.get('id') or version.get('version_id')
+            
+            if not model_id or not version_id:
+                self.downloaded_filename_label.setText("No file downloaded for this version")
+                self.show_in_folder_btn.setEnabled(False)
+                return
+            
+            # Check if this version is downloaded
+            download_record = self.db_manager.find_downloaded_model(model_id, version_id)
+            if not download_record:
+                self.downloaded_filename_label.setText("No file downloaded for this version")
+                self.show_in_folder_btn.setEnabled(False)
+                return
+            
+            # Get the file path from the download record
+            file_path = download_record.get('file_path')
+            if file_path and os.path.exists(file_path):
+                filename = os.path.basename(file_path)
+                self.downloaded_filename_label.setText(filename)
+                self.show_in_folder_btn.setEnabled(True)
+                # Store the file path for the show in folder function
+                self._current_downloaded_file_path = file_path
+            else:
+                self.downloaded_filename_label.setText("Downloaded file not found on disk")
+                self.show_in_folder_btn.setEnabled(False)
+                self._current_downloaded_file_path = None
+                
+        except Exception as e:
+            print(f"Error updating filename display: {e}")
+            self.downloaded_filename_label.setText("Error retrieving file information")
+            self.show_in_folder_btn.setEnabled(False)
+    
+    def show_model_in_folder(self):
+        """Open the folder containing the downloaded model file and select it."""
+        try:
+            print("DEBUG: show_model_in_folder called")
+            file_path = getattr(self, '_current_downloaded_file_path', None)
+            print(f"DEBUG: _current_downloaded_file_path = {file_path}")
+            
+            if not file_path:
+                print("DEBUG: No file path stored")
+                QMessageBox.warning(
+                    self, 
+                    "File Not Found",
+                    "No file path is stored. Please select a downloaded version first.",
+                    QMessageBox.Ok
+                )
+                return
+                
+            if not os.path.exists(file_path):
+                print(f"DEBUG: File does not exist at path: {file_path}")
+                QMessageBox.warning(
+                    self, 
+                    "File Not Found",
+                    f"The downloaded file could not be found on disk:\n{file_path}\n\nIt may have been moved or deleted.",
+                    QMessageBox.Ok
+                )
+                return
+            
+            import subprocess
+            import platform
+            
+            system = platform.system()
+            print(f"DEBUG: Operating system: {system}")
+            
+            # Normalize the path to use the correct separators for the OS
+            normalized_path = os.path.normpath(file_path)
+            print(f"DEBUG: Original path: {file_path}")
+            print(f"DEBUG: Normalized path: {normalized_path}")
+            print(f"DEBUG: Opening file location for: {normalized_path}")
+            
+            if system == "Windows":
+                # Use explorer.exe with /select to highlight the file
+                cmd = ['explorer.exe', '/select,', normalized_path]
+                print(f"DEBUG: Running command: {cmd}")
+                result = subprocess.run(cmd, check=False)
+                print(f"DEBUG: Command exit code: {result.returncode}")
+            elif system == "Darwin":  # macOS
+                # Use Finder to reveal the file
+                cmd = ['open', '-R', normalized_path]
+                print(f"DEBUG: Running command: {cmd}")
+                result = subprocess.run(cmd, check=False)
+                print(f"DEBUG: Command exit code: {result.returncode}")
+            elif system == "Linux":
+                # Try to open the folder containing the file
+                folder_path = os.path.dirname(normalized_path)
+                cmd = ['xdg-open', folder_path]
+                print(f"DEBUG: Running command: {cmd}")
+                result = subprocess.run(cmd, check=False)
+                print(f"DEBUG: Command exit code: {result.returncode}")
+            else:
+                # Fallback: just open the directory
+                folder_path = os.path.dirname(normalized_path)
+                print(f"DEBUG: Using QDesktopServices for folder: {folder_path}")
+                QDesktopServices.openUrl(QUrl.fromLocalFile(folder_path))
+                
+        except Exception as e:
+            print(f"Error showing file in folder: {e}")
+            QMessageBox.warning(
+                self, 
+                "Error",
+                f"Could not open the file location: {str(e)}",
+                QMessageBox.Ok
+            )
     
     def download_selected_version(self):
         if not self.current_version or not self.current_model:
@@ -2362,6 +2501,20 @@ class MainWindow(QMainWindow):
             self.download_btn.setVisible(True)
             # enable only if a version is selected
             self.download_btn.setEnabled(bool(getattr(self, 'current_version', None)))
+        except Exception:
+            pass
+        
+        # Reset custom tags input and show it (hide filename display)
+        try:
+            self.custom_tags_input.setVisible(True)
+            self.custom_tags_input.clear()
+            self.downloaded_filename_group.setVisible(False)
+        except Exception:
+            pass
+        
+        # Hide downloaded explorer specific buttons
+        try:
+            self.show_in_folder_btn.setVisible(False)
         except Exception:
             pass
         

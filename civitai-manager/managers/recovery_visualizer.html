@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CivitAI Model Recovery Results</title>
+    <link rel="stylesheet" href="styles/recovery_visualizer.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Header Section -->
+        <header class="header">
+            <div class="header-content">
+                <div class="logo-section">
+                    <i class="fas fa-download"></i>
+                    <h1>Model Recovery Results</h1>
+                </div>
+                <div class="timestamp">
+                    <i class="fas fa-clock"></i>
+                    <span id="recovery-timestamp">Recovery completed at: Loading...</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Statistics Dashboard -->
+        <section class="stats-dashboard">
+            <div class="stats-grid">
+                <div class="stat-card success">
+                    <div class="stat-icon">
+                        <i class="fas fa-check-circle"></i>
+                    </div>
+                    <div class="stat-content">
+                        <h3 id="successful-count">0</h3>
+                        <p>Successfully Recovered</p>
+                    </div>
+                </div>
+                <div class="stat-card failed">
+                    <div class="stat-icon">
+                        <i class="fas fa-times-circle"></i>
+                    </div>
+                    <div class="stat-content">
+                        <h3 id="failed-count">0</h3>
+                        <p>Failed Recovery</p>
+                    </div>
+                </div>
+                <div class="stat-card skipped">
+                    <div class="stat-icon">
+                        <i class="fas fa-minus-circle"></i>
+                    </div>
+                    <div class="stat-content">
+                        <h3 id="skipped-count">0</h3>
+                        <p>Already Registered</p>
+                    </div>
+                </div>
+                <div class="stat-card duplicates">
+                    <div class="stat-icon">
+                        <i class="fas fa-copy"></i>
+                    </div>
+                    <div class="stat-content">
+                        <h3 id="duplicates-count">0</h3>
+                        <p>Duplicates Found</p>
+                    </div>
+                </div>
+                <div class="stat-card total">
+                    <div class="stat-icon">
+                        <i class="fas fa-files"></i>
+                    </div>
+                    <div class="stat-content">
+                        <h3 id="total-files">0</h3>
+                        <p>Total Files Processed</p>
+                    </div>
+                </div>
+                <div class="stat-card size">
+                    <div class="stat-icon">
+                        <i class="fas fa-hdd"></i>
+                    </div>
+                    <div class="stat-content">
+                        <h3 id="total-size">0 MB</h3>
+                        <p>Total Size</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Control Panel -->
+        <section class="control-panel">
+            <div class="controls-row">
+                <!-- Search -->
+                <div class="search-container">
+                    <i class="fas fa-search"></i>
+                    <input type="text" id="search-input" placeholder="Search files by name, path, or details...">
+                    <button id="clear-search" class="clear-btn" title="Clear search">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+
+                <!-- Filter by Status -->
+                <div class="filter-container">
+                    <label for="status-filter">
+                        <i class="fas fa-filter"></i>
+                        Status Filter:
+                    </label>
+                    <select id="status-filter">
+                        <option value="all">All Results</option>
+                        <option value="success">Successfully Recovered</option>
+                        <option value="failed">Failed Recovery</option>
+                        <option value="skipped">Already Registered</option>
+                        <option value="duplicate">Duplicates</option>
+                    </select>
+                </div>
+
+                <!-- Size Filter -->
+                <div class="filter-container">
+                    <label for="size-filter">
+                        <i class="fas fa-weight-hanging"></i>
+                        Size Filter:
+                    </label>
+                    <select id="size-filter">
+                        <option value="all">All Sizes</option>
+                        <option value="small">< 100 MB</option>
+                        <option value="medium">100 MB - 1 GB</option>
+                        <option value="large">1 GB - 5 GB</option>
+                        <option value="xlarge">> 5 GB</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="controls-row">
+                <!-- Export Options -->
+                <div class="export-container">
+                    <button id="export-csv" class="export-btn">
+                        <i class="fas fa-file-csv"></i>
+                        Export CSV
+                    </button>
+                    <button id="export-json" class="export-btn">
+                        <i class="fas fa-file-code"></i>
+                        Export JSON
+                    </button>
+                </div>
+
+                <!-- View Options -->
+                <div class="view-options">
+                    <button id="toggle-details" class="view-btn active" title="Toggle detailed view">
+                        <i class="fas fa-list"></i>
+                        Details
+                    </button>
+                    <button id="toggle-compact" class="view-btn" title="Toggle compact view">
+                        <i class="fas fa-th-list"></i>
+                        Compact
+                    </button>
+                </div>
+
+                <!-- Results Count -->
+                <div class="results-info">
+                    <span id="filtered-count">0</span> of <span id="total-count">0</span> results
+                </div>
+            </div>
+        </section>
+
+        <!-- Results Table -->
+        <section class="table-section">
+            <div class="table-container">
+                <table id="results-table" class="results-table">
+                    <thead>
+                        <tr>
+                            <th data-sort="filename" class="sortable">
+                                <i class="fas fa-file"></i>
+                                Filename
+                                <i class="fas fa-sort sort-icon"></i>
+                            </th>
+                            <th data-sort="filepath" class="sortable">
+                                <i class="fas fa-folder"></i>
+                                File Path
+                                <i class="fas fa-sort sort-icon"></i>
+                            </th>
+                            <th data-sort="status" class="sortable">
+                                <i class="fas fa-info-circle"></i>
+                                Status
+                                <i class="fas fa-sort sort-icon"></i>
+                            </th>
+                            <th data-sort="size" class="sortable">
+                                <i class="fas fa-weight-hanging"></i>
+                                Size
+                                <i class="fas fa-sort sort-icon"></i>
+                            </th>
+                            <th data-sort="details" class="sortable">
+                                <i class="fas fa-list-ul"></i>
+                                Details
+                                <i class="fas fa-sort sort-icon"></i>
+                            </th>
+                            <th class="actions-col">
+                                <i class="fas fa-cogs"></i>
+                                Actions
+                            </th>
+                        </tr>
+                    </thead>
+                    <tbody id="table-body">
+                        <!-- Table rows will be populated by JavaScript -->
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Loading State -->
+            <div id="loading-state" class="loading-state">
+                <div class="loading-spinner">
+                    <i class="fas fa-spinner fa-spin"></i>
+                </div>
+                <p>Loading recovery results...</p>
+            </div>
+
+            <!-- Empty State -->
+            <div id="empty-state" class="empty-state" style="display: none;">
+                <div class="empty-icon">
+                    <i class="fas fa-search"></i>
+                </div>
+                <h3>No results found</h3>
+                <p>Try adjusting your search criteria or filters.</p>
+            </div>
+        </section>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <div class="footer-content">
+                <p>CivitAI Download Manager - Model Recovery Results</p>
+                <p>Generated on <span id="generation-date"></span></p>
+            </div>
+        </footer>
+    </div>
+
+    <!-- Modal for File Details -->
+    <div id="file-details-modal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>File Details</h3>
+                <button class="modal-close" id="modal-close">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div id="modal-file-details">
+                    <!-- Details will be populated by JavaScript -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="scripts/recovery_visualizer.js"></script>
+</body>
+</html>
