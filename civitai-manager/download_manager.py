@@ -104,8 +104,15 @@ def _append_log(msg: str):
     try:
         with open(_LOG_PATH, 'a', encoding='utf-8') as f:
             f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} - {msg}\n")
+        # Also print critical messages to console
+        if any(keyword in msg.lower() for keyword in ['error', 'failed', 'exception', 'crash']):
+            print(f"[ERROR] {msg}")
     except Exception:
         pass
+
+def get_debug_log_path():
+    """Get the path to the debug log file"""
+    return _LOG_PATH
 
 class DownloadSignals(QObject):
     progress = pyqtSignal(str, int, int)  # file_name, received, total
@@ -405,40 +412,75 @@ class DownloadManager(QObject):
             pass
 
         # Decide whether to start immediately based on our active_downloads tracking
-        if len(self.active_downloads) < MAX_CONCURRENT_DOWNLOADS:
-            print(f"DownloadManager.add_download: starting '{task.file_name}' immediately")
-            _append_log(f"add_download: starting '{task.file_name}' immediately")
-            self.active_downloads.append(task)
-            try:
-                # prevent Qt from auto-deleting the C++ wrapper while we still hold Python refs
+        try:
+            self.debug_queue_state()  # Log current state before making changes
+            
+            if len(self.active_downloads) < MAX_CONCURRENT_DOWNLOADS:
+                print(f"DownloadManager.add_download: starting '{task.file_name}' immediately")
+                _append_log(f"add_download: starting '{task.file_name}' immediately")
+                
+                # Validate task before starting
+                if not hasattr(task, 'file_name') or not hasattr(task, 'url') or not hasattr(task, 'save_path'):
+                    _append_log(f"add_download: task '{getattr(task, 'file_name', 'unknown')}' missing required attributes")
+                    return
+                    
+                self.active_downloads.append(task)
+                
                 try:
-                    task.setAutoDelete(False)
-                except Exception:
-                    pass
-                self.thread_pool.start(task)
-                self.download_tasks[task.file_name] = task
-                self.download_status[task.file_name] = 'downloading'  # Track initial status
-                try:
-                    self.download_started.emit(task.file_name)
-                except Exception:
-                    pass
-            except Exception as e:
-                _append_log(f"add_download: thread_pool.start failed: {e}")
-                # fallback to queuing
-                try:
-                    self.active_downloads.remove(task)
-                except Exception:
-                    pass
+                    # Prevent Qt from auto-deleting the C++ wrapper while we still hold Python refs
+                    try:
+                        task.setAutoDelete(False)
+                    except Exception as e:
+                        _append_log(f"add_download: setAutoDelete failed for '{task.file_name}': {e}")
+                        
+                    # Start the task
+                    self.thread_pool.start(task)
+                    self.download_tasks[task.file_name] = task
+                    self.download_status[task.file_name] = 'downloading'  # Track initial status
+                    
+                    try:
+                        self.download_started.emit(task.file_name)
+                    except Exception as e:
+                        _append_log(f"add_download: failed to emit download_started for '{task.file_name}': {e}")
+                        
+                except RuntimeError as re:
+                    _append_log(f"add_download: RuntimeError starting '{task.file_name}': {re}")
+                    # Fallback to queuing
+                    try:
+                        self.active_downloads.remove(task)
+                    except Exception:
+                        pass
+                    self.queued_downloads.append(task)
+                    try:
+                        self.download_queued.emit(task.file_name)
+                    except Exception:
+                        pass
+                except Exception as e:
+                    _append_log(f"add_download: thread_pool.start failed for '{task.file_name}': {e}")
+                    # Fallback to queuing
+                    try:
+                        self.active_downloads.remove(task)
+                    except Exception:
+                        pass
+                    self.queued_downloads.append(task)
+                    try:
+                        self.download_queued.emit(task.file_name)
+                    except Exception:
+                        pass
+            else:
+                # Not enough capacity: queue the task
+                print(f"DownloadManager.add_download: queuing '{task.file_name}'")
+                _append_log(f"add_download: queuing '{task.file_name}'")
                 self.queued_downloads.append(task)
-        else:
-            # Not enough capacity: queue the task
-            print(f"DownloadManager.add_download: queuing '{task.file_name}'")
-            _append_log(f"add_download: queuing '{task.file_name}'")
-            self.queued_downloads.append(task)
-            try:
-                self.download_queued.emit(task.file_name)
-            except Exception:
-                pass
+                try:
+                    self.download_queued.emit(task.file_name)
+                except Exception as e:
+                    _append_log(f"add_download: failed to emit download_queued for '{task.file_name}': {e}")
+                    
+        except Exception as e:
+            _append_log(f"add_download: unexpected error in download logic: {e}")
+            print(f"DownloadManager.add_download: unexpected error: {e}")
+            return
 
         # notify UI that downloads changed
         try:
@@ -509,29 +551,117 @@ class DownloadManager(QObject):
             
             # Start next download if available
             if self.queued_downloads:
-                next_task = self.queued_downloads.pop(0)
-                self.active_downloads.append(next_task)
                 try:
+                    next_task = self.queued_downloads.pop(0)
+                    _append_log(f"cancel_download: promoting queued task '{next_task.file_name}' to active after cancellation")
+                    
+                    # Validate the task before proceeding
+                    if not hasattr(next_task, 'file_name') or not hasattr(next_task, 'url'):
+                        _append_log(f"cancel_download: invalid next_task structure, skipping")
+                        return
+                        
+                    self.active_downloads.append(next_task)
+                    
                     try:
-                        next_task.setAutoDelete(False)
-                    except Exception:
-                        pass
-                    self.thread_pool.start(next_task)
-                    # Set status for new task
-                    self.download_status[next_task.file_name] = 'downloading'
-                    # ensure mapping is updated so dedupe checks remain accurate
-                    try:
+                        try:
+                            next_task.setAutoDelete(False)
+                        except Exception as e:
+                            _append_log(f"cancel_download: setAutoDelete failed for '{next_task.file_name}': {e}")
+                            
+                        # Connect signals before starting
+                        try:
+                            # Disconnect any existing connections to avoid duplicates
+                            try:
+                                next_task.signals.completed.disconnect()
+                                next_task.signals.error.disconnect()
+                            except:
+                                pass
+                                
+                            next_task.signals.completed.connect(lambda fn, fp, fs, t=next_task: self._on_task_completed(t, fn, fp, fs))
+                            next_task.signals.error.connect(lambda fn, err, t=next_task: self._on_task_error(t, fn, err))
+                        except Exception as e:
+                            _append_log(f"cancel_download: failed to connect signals for '{next_task.file_name}': {e}")
+                            
+                        self.thread_pool.start(next_task)
+                        
+                        # Set status for new task
+                        self.download_status[next_task.file_name] = 'downloading'
+                        
+                        # Ensure mapping is updated so dedupe checks remain accurate
                         self.download_tasks[next_task.file_name] = next_task
-                    except Exception:
-                        pass
-                except Exception:
-                    # if starting fails, put it back to queued to avoid loss
-                    try:
-                        if next_task in self.active_downloads:
-                            self.active_downloads.remove(next_task)
-                        self.queued_downloads.insert(0, next_task)
-                    except Exception:
-                        pass
+                        
+                        _append_log(f"cancel_download: successfully started '{next_task.file_name}'")
+                        
+                        try:
+                            self.download_started.emit(next_task.file_name)
+                        except Exception as e:
+                            _append_log(f"cancel_download: failed to emit download_started for '{next_task.file_name}': {e}")
+                            
+                    except RuntimeError as re:
+                        _append_log(f"cancel_download: RuntimeError starting '{next_task.file_name}': {re}")
+                        # Clean up and restore to queue
+                        self._cleanup_and_restore_task(next_task)
+                    except Exception as e:
+                        _append_log(f"cancel_download: failed to start '{next_task.file_name}': {e}")
+                        # Clean up and restore to queue
+                        self._cleanup_and_restore_task(next_task)
+                        
+                except IndexError:
+                    _append_log("cancel_download: queued_downloads list was empty during pop")
+                except Exception as e:
+                    _append_log(f"cancel_download: error promoting queued download: {e}")
+                    
+    def _cleanup_and_restore_task(self, task):
+        """Clean up a failed task and restore it to the queue"""
+        try:
+            if task and hasattr(task, 'file_name'):
+                file_name = task.file_name
+                
+                # Remove from active downloads
+                if task in self.active_downloads:
+                    self.active_downloads.remove(task)
+                    _append_log(f"_cleanup_and_restore_task: removed '{file_name}' from active_downloads")
+                    
+                # Remove from tracking
+                if file_name in self.download_tasks:
+                    del self.download_tasks[file_name]
+                if file_name in self.download_status:
+                    del self.download_status[file_name]
+                    
+                # Restore to front of queue
+                self.queued_downloads.insert(0, task)
+                _append_log(f"_cleanup_and_restore_task: restored '{file_name}' to queue")
+                
+        except Exception as e:
+            _append_log(f"_cleanup_and_restore_task: error during cleanup and restore: {e}")
+            
+    def debug_queue_state(self):
+        """Log current queue state for debugging"""
+        try:
+            _append_log(f"=== QUEUE STATE DEBUG ===")
+            _append_log(f"Active downloads: {len(self.active_downloads)}")
+            for i, task in enumerate(self.active_downloads):
+                try:
+                    name = getattr(task, 'file_name', '<no name>')
+                    _append_log(f"  Active {i}: {name}")
+                except:
+                    _append_log(f"  Active {i}: <invalid task>")
+                    
+            _append_log(f"Queued downloads: {len(self.queued_downloads)}")
+            for i, task in enumerate(self.queued_downloads):
+                try:
+                    name = getattr(task, 'file_name', '<no name>')
+                    _append_log(f"  Queued {i}: {name}")
+                except:
+                    _append_log(f"  Queued {i}: <invalid task>")
+                    
+            _append_log(f"Download tasks mapping: {len(self.download_tasks)}")
+            _append_log(f"Download status mapping: {len(self.download_status)}")
+            _append_log(f"Thread pool active count: {self.thread_pool.activeThreadCount()}")
+            _append_log(f"Thread pool max threads: {self.thread_pool.maxThreadCount()}")
+            _append_log(f"=== END QUEUE STATE ===")
+        except Exception as e:
+            _append_log(f"debug_queue_state: error logging state: {e}")
             # emit change
             try:
                 self.downloads_changed.emit()
@@ -562,13 +692,46 @@ class DownloadManager(QObject):
             
         # Immediately start next queued download to keep the pipeline flowing
         if self.queued_downloads:
-            next_task = self.queued_downloads.pop(0)
-            self.active_downloads.append(next_task)
-            # defer starting the next task to the event loop to avoid C++ wrapper deletion issues
             try:
-                QTimer.singleShot(0, lambda t=next_task: self._start_next_task(t))
+                next_task = self.queued_downloads.pop(0)
+                _append_log(f"_on_task_completed: promoting queued task '{next_task.file_name}' to active")
+                
+                # Validate the task before adding to active downloads
+                if not hasattr(next_task, 'file_name') or not hasattr(next_task, 'url'):
+                    _append_log(f"_on_task_completed: invalid task structure, skipping")
+                    return
+                
+                self.active_downloads.append(next_task)
+                
+                # Use QTimer to defer starting the task to avoid C++ wrapper deletion issues
+                # and ensure we're in the main thread when starting
+                try:
+                    QTimer.singleShot(100, lambda t=next_task: self._start_next_task(t))
+                    _append_log(f"_on_task_completed: scheduled next_task '{next_task.file_name}' to start")
+                except Exception as e:
+                    _append_log(f"_on_task_completed: failed to schedule next_task start: {e}")
+                    # If scheduling fails, remove from active and put back in queue
+                    try:
+                        if next_task in self.active_downloads:
+                            self.active_downloads.remove(next_task)
+                        self.queued_downloads.insert(0, next_task)
+                        _append_log(f"_on_task_completed: restored '{next_task.file_name}' to queue after scheduling failure")
+                    except Exception as cleanup_e:
+                        _append_log(f"_on_task_completed: failed to restore task to queue: {cleanup_e}")
+                        
+            except IndexError:
+                _append_log("_on_task_completed: queued_downloads list was empty during pop")
             except Exception as e:
-                _append_log(f"_on_task_completed: failed to schedule next_task start: {e}")
+                _append_log(f"_on_task_completed: error promoting queued download: {e}")
+                # Try to restore task to queue if possible
+                try:
+                    if 'next_task' in locals() and next_task:
+                        if next_task in self.active_downloads:
+                            self.active_downloads.remove(next_task)
+                        self.queued_downloads.insert(0, next_task)
+                        _append_log(f"_on_task_completed: restored task to queue after error")
+                except Exception as restore_e:
+                    _append_log(f"_on_task_completed: failed to restore task after error: {restore_e}")
         
         # Emit signal that we're gathering images
         try:
@@ -667,28 +830,127 @@ class DownloadManager(QObject):
             pass
 
     def _start_next_task(self, task):
+        """Start the next queued task with comprehensive error handling"""
         try:
+            if not task:
+                _append_log("_start_next_task: received None task, skipping")
+                return
+                
+            if not hasattr(task, 'file_name'):
+                _append_log("_start_next_task: task missing file_name attribute, skipping")
+                return
+                
+            _append_log(f"_start_next_task: attempting to start '{task.file_name}'")
+            
+            # Check if task is still valid
+            if not hasattr(task, 'url') or not hasattr(task, 'save_path'):
+                _append_log(f"_start_next_task: task '{task.file_name}' missing required attributes")
+                return
+                
+            # Ensure task hasn't been deleted/destroyed
+            try:
+                task_filename = task.file_name  # Test access to ensure object is valid
+            except RuntimeError as re:
+                _append_log(f"_start_next_task: task object destroyed, cannot start: {re}")
+                return
+            except Exception as e:
+                _append_log(f"_start_next_task: task object invalid: {e}")
+                return
+            
+            # Set AutoDelete to False to prevent Qt from deleting the object
             try:
                 task.setAutoDelete(False)
-            except Exception:
-                pass
-            self.thread_pool.start(task)
-            self.download_tasks[task.file_name] = task
-            _append_log(f"_start_next_task: started '{task.file_name}'")
+            except RuntimeError as re:
+                _append_log(f"_start_next_task: setAutoDelete failed (object destroyed?): {re}")
+                return
+            except Exception as e:
+                _append_log(f"_start_next_task: setAutoDelete failed: {e}")
+                # Continue anyway, this might not be critical
+                
+            # Add task to tracking before starting
+            try:
+                self.download_tasks[task.file_name] = task
+                self.download_status[task.file_name] = 'downloading'
+                _append_log(f"_start_next_task: added '{task.file_name}' to tracking")
+            except Exception as e:
+                _append_log(f"_start_next_task: failed to add task to tracking: {e}")
+                return
+                
+            # Connect signals if not already connected
+            try:
+                # Disconnect any existing connections to avoid duplicates
+                try:
+                    task.signals.completed.disconnect()
+                    task.signals.error.disconnect()
+                except:
+                    pass  # Ignore if no connections exist
+                    
+                # Connect fresh signals
+                task.signals.completed.connect(lambda fn, fp, fs, t=task: self._on_task_completed(t, fn, fp, fs))
+                task.signals.error.connect(lambda fn, err, t=task: self._on_task_error(t, fn, err))
+                _append_log(f"_start_next_task: connected signals for '{task.file_name}'")
+            except Exception as e:
+                _append_log(f"_start_next_task: failed to connect signals for '{task.file_name}': {e}")
+                # Continue anyway, signals might already be connected
+                
+            # Start the task in thread pool
+            try:
+                self.thread_pool.start(task)
+                _append_log(f"_start_next_task: successfully started '{task.file_name}' in thread pool")
+            except RuntimeError as re:
+                _append_log(f"_start_next_task: RuntimeError starting '{task.file_name}': {re}")
+                # Clean up tracking
+                self._cleanup_failed_task(task)
+                return
+            except Exception as e:
+                _append_log(f"_start_next_task: failed to start '{task.file_name}' in thread pool: {e}")
+                # Clean up tracking
+                self._cleanup_failed_task(task)
+                return
+                
+            # Emit download started signal
             try:
                 self.download_started.emit(task.file_name)
-            except Exception:
-                pass
-        except RuntimeError as re:
-            _append_log(f"_start_next_task: RuntimeError starting '{getattr(task, 'file_name', '<unknown>')}': {re}")
+                _append_log(f"_start_next_task: emitted download_started for '{task.file_name}'")
+            except Exception as e:
+                _append_log(f"_start_next_task: failed to emit download_started for '{task.file_name}': {e}")
+                # Don't return here, download might still work
+                
         except Exception as e:
-            _append_log(f"_start_next_task: failed to start '{getattr(task, 'file_name', '<unknown>')}': {e}")
+            # Catch-all for any unexpected errors
+            task_name = getattr(task, 'file_name', '<unknown>') if task else '<None>'
+            _append_log(f"_start_next_task: unexpected error starting '{task_name}': {e}")
+            if task:
+                self._cleanup_failed_task(task)
 
-        # emit change for UI
+        # Always emit downloads_changed to update UI
         try:
             self.downloads_changed.emit()
-        except Exception:
-            pass
+        except Exception as e:
+            _append_log(f"_start_next_task: failed to emit downloads_changed: {e}")
+            
+    def _cleanup_failed_task(self, task):
+        """Clean up tracking for a task that failed to start"""
+        try:
+            if task and hasattr(task, 'file_name'):
+                file_name = task.file_name
+                
+                # Remove from active downloads if present
+                if task in self.active_downloads:
+                    self.active_downloads.remove(task)
+                    _append_log(f"_cleanup_failed_task: removed '{file_name}' from active_downloads")
+                    
+                # Remove from tracking
+                if file_name in self.download_tasks:
+                    del self.download_tasks[file_name]
+                    _append_log(f"_cleanup_failed_task: removed '{file_name}' from download_tasks")
+                    
+                if file_name in self.download_status:
+                    del self.download_status[file_name]
+                    _append_log(f"_cleanup_failed_task: removed '{file_name}' from download_status")
+                    
+        except Exception as e:
+            _append_log(f"_cleanup_failed_task: error during cleanup: {e}")
 
     def _on_task_error(self, task, file_name, error_message):
         # Treat error similar to completion for lifecycle management
