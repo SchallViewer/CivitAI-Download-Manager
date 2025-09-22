@@ -16,7 +16,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtGui import (
     QIcon, QFont, QColor, QPalette, QBrush, QPixmap, QImage, QPainter, 
-    QDesktopServices, QStandardItemModel, QStandardItem
+    QDesktopServices, QStandardItemModel, QStandardItem, QCursor
 )
 from PyQt5.QtCore import (
     Qt, QSize, QTimer, QUrl, QThread, pyqtSignal, QObject, QByteArray,
@@ -167,6 +167,105 @@ class MainWindow(QMainWindow):
 
     def _notify_download_fully_completed(self, file_name: str):
         self.notification_manager.notify_download_fully_completed(file_name)
+        
+    def show_debug_menu(self):
+        """Show debug tools menu for troubleshooting"""
+        from PyQt5.QtWidgets import QMenu, QMessageBox
+        from download_manager import get_debug_log_path
+        import webbrowser
+        
+        menu = QMenu(self)
+        
+        # Debug log viewer
+        view_log_action = menu.addAction("📄 View Debug Log")
+        view_log_action.triggered.connect(self.view_debug_log)
+        
+        # Queue state debug
+        queue_debug_action = menu.addAction("🔍 Log Queue State")
+        queue_debug_action.triggered.connect(self.debug_queue_state)
+        
+        # Clear debug log
+        clear_log_action = menu.addAction("🗑️ Clear Debug Log")
+        clear_log_action.triggered.connect(self.clear_debug_log)
+        
+        # Show log file location
+        show_location_action = menu.addAction("📁 Show Log Location")
+        show_location_action.triggered.connect(self.show_log_location)
+        
+        # Show the menu at the cursor position
+        try:
+            # Try to show menu near the debug button if possible
+            toolbar = self.findChild(QToolBar)
+            if toolbar:
+                menu.exec_(toolbar.mapToGlobal(toolbar.rect().bottomRight()))
+            else:
+                # Fallback to cursor position
+                menu.exec_(QCursor.pos())
+        except Exception:
+            # Final fallback to cursor position
+            from PyQt5.QtGui import QCursor
+            menu.exec_(QCursor.pos())
+        
+    def view_debug_log(self):
+        """Open debug log in default text editor"""
+        try:
+            from download_manager import get_debug_log_path
+            import os
+            import subprocess
+            import platform
+            
+            log_path = get_debug_log_path()
+            if os.path.exists(log_path):
+                # Try to open with default text editor based on OS
+                if platform.system() == "Windows":
+                    os.startfile(log_path)
+                elif platform.system() == "Darwin":  # macOS
+                    subprocess.call(["open", log_path])
+                else:  # Linux
+                    subprocess.call(["xdg-open", log_path])
+            else:
+                QMessageBox.information(self, "Debug Log", f"Debug log file not found at:\n{log_path}")
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to open debug log:\n{str(e)}")
+            
+    def debug_queue_state(self):
+        """Log current download queue state for debugging"""
+        try:
+            self.download_manager.debug_queue_state()
+            QMessageBox.information(self, "Debug", "Queue state logged to debug file.")
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to log queue state:\n{str(e)}")
+            
+    def clear_debug_log(self):
+        """Clear the debug log file"""
+        try:
+            from download_manager import get_debug_log_path
+            
+            reply = QMessageBox.question(self, "Clear Debug Log", 
+                                       "Are you sure you want to clear the debug log?",
+                                       QMessageBox.Yes | QMessageBox.No,
+                                       QMessageBox.No)
+            if reply == QMessageBox.Yes:
+                log_path = get_debug_log_path()
+                with open(log_path, 'w') as f:
+                    f.write("")
+                QMessageBox.information(self, "Debug Log", "Debug log cleared.")
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to clear debug log:\n{str(e)}")
+            
+    def show_log_location(self):
+        """Show the debug log file location"""
+        try:
+            from download_manager import get_debug_log_path
+            import os
+            
+            log_path = get_debug_log_path()
+            log_dir = os.path.dirname(log_path)
+            
+            # Open the directory containing the log file
+            os.startfile(log_dir)
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to show log location:\n{str(e)}")
     
     def init_ui(self):
         # Create main central widget
@@ -471,6 +570,13 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self.history_action)
         toolbar.addSeparator()
         toolbar.addAction(self.settings_action)
+        
+        # Add debug menu for troubleshooting
+        toolbar.addSeparator()
+        self.debug_action = QAction("🐛", self)
+        self.debug_action.setToolTip("Debug Tools")
+        self.debug_action.triggered.connect(self.show_debug_menu)
+        toolbar.addAction(self.debug_action)
     
     def create_welcome_panel(self):
         self.welcome_panel = QWidget()
