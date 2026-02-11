@@ -48,13 +48,6 @@ Desktop application for brownsing, downloading and managing Checkpoints, LoRA's 
 - Requires internet connection for API access
 - Large model collections may require significant storage
 
-### Practices
-- API keys stored securely in Windows Registry (not in files)
-- File integrity verification with SHA-256 hashing
-- Safe download handling (prefers .safetensors over .pkl)
-- Export files exclude sensitive data
-
-
 ### How to use?
 
 1. **Download** the release package below or **clone repository**

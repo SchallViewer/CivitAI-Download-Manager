@@ -214,7 +214,7 @@ class DatabaseManager:
         try:
             cursor = self.conn.cursor()
             cursor.execute('''
-                SELECT d.download_date,
+                SELECT d.download_date, d.file_path,
                        m.model_id, m.name AS model_name, m.type AS model_type, m.url AS model_url, m.metadata AS model_metadata,
                        v.version_id, v.name AS version, v.metadata AS version_metadata
                 FROM downloads d
@@ -226,7 +226,7 @@ class DatabaseManager:
             row = cursor.fetchone()
             if not row:
                 return None
-            (download_date, mid, model_name, model_type, model_url, model_meta, vid, version_name, version_meta) = row
+            (download_date, file_path, mid, model_name, model_type, model_url, model_meta, vid, version_name, version_meta) = row
             try:
                 mmeta = json.loads(model_meta or '{}')
             except Exception:
@@ -240,6 +240,7 @@ class DatabaseManager:
             imgs = [r[0] for r in cursor.fetchall() if r and r[0]]
             return {
                 'download_date': download_date,
+                'file_path': file_path,
                 'model_id': mid,
                 'model_name': model_name,
                 'model_type': model_type,
@@ -309,6 +310,33 @@ class DatabaseManager:
                 pass
             print(f"Database error checking downloaded: {e}")
             return False
+
+    def get_downloaded_file_info(self, model_id, version_id):
+        """Return latest file info for a downloaded model/version."""
+        try:
+            with self._lock:
+                cur = self.conn.cursor()
+                cur.execute(
+                    '''
+                    SELECT d.original_file_name, d.file_path
+                    FROM downloads d
+                    WHERE d.model_id = ? AND d.version_id = ?
+                      AND d.status IN ('Completed','Imported','Missing')
+                    ORDER BY d.download_date DESC LIMIT 1
+                    ''',
+                    (model_id, version_id),
+                )
+                row = cur.fetchone()
+                if not row:
+                    return None
+                original_file_name, file_path = row
+                return {
+                    'original_file_name': original_file_name,
+                    'file_path': file_path,
+                }
+        except Exception as e:
+            print(f"Database error fetching file info: {e}")
+            return None
 
     def get_downloaded_models(self):
         """Return a list of downloaded entries (one per model-version) with metadata and local images.
@@ -872,6 +900,27 @@ class DatabaseManager:
         except Exception:
             pass
         return out
+
+    def get_downloaded_base_models(self):
+        """Return sorted list of base_model values for downloaded versions."""
+        try:
+            with self._lock:
+                cur = self.conn.cursor()
+                cur.execute(
+                    '''
+                    SELECT DISTINCT v.base_model
+                    FROM versions v
+                    JOIN downloads d ON d.version_id = v.version_id
+                    WHERE d.status IN ('Completed','Imported','Missing')
+                      AND v.base_model IS NOT NULL
+                      AND TRIM(v.base_model) <> ''
+                    ORDER BY v.base_model ASC
+                    '''
+                )
+                return [row[0] for row in cur.fetchall() if row and row[0]]
+        except Exception as e:
+            print(f"Database error fetching base models: {e}")
+            return []
 
     def delete_model_version(self, model_id: int, version_id: int):
         """Delete a specific model version:

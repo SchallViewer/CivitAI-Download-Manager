@@ -238,6 +238,38 @@ class DetailsPanelBuilder:
         host.open_browser_btn.clicked.connect(host.open_model_in_browser)
         info_layout.addWidget(host.open_browser_btn)
 
+        # Show in folder button (visible only in Downloaded Explorer context)
+        host.show_in_folder_btn = QPushButton("Show in Folder")
+        host.show_in_folder_btn.setFont(QFont("Segoe UI", 10))
+        host.show_in_folder_btn.setStyleSheet(
+            f"""
+            QPushButton {{
+                background-color: {CARD_BACKGROUND.name()};
+                color: {TEXT_COLOR.name()};
+                padding: 8px;
+                border-radius: 4px;
+                font-weight: bold;
+                border: 1px solid {PRIMARY_COLOR.name()};
+            }}
+            QPushButton:hover {{
+                background-color: {PRIMARY_COLOR.name()};
+                color: white;
+            }}
+            QPushButton:disabled {{
+                background-color: #555;
+                color: #888;
+            }}
+            """
+        )
+        host.show_in_folder_btn.setFixedHeight(35)
+        host.show_in_folder_btn.setEnabled(False)
+        host.show_in_folder_btn.setVisible(False)
+        try:
+            host.show_in_folder_btn.clicked.connect(host.show_model_in_folder)
+        except Exception:
+            pass
+        info_layout.addWidget(host.show_in_folder_btn)
+
         # Delete version button (visible only in Downloaded Explorer context)
         host.delete_version_btn = QPushButton("Delete Selected Version")
         host.delete_version_btn.setFont(QFont("Segoe UI", 9, QFont.Bold))
@@ -376,7 +408,7 @@ class DetailsPanelBuilder:
         host.download_btn.clicked.connect(host.download_selected_version)
         version_layout.addWidget(host.download_btn)
 
-        # Custom download tags input
+        # Custom download tags input (visible only in Search Explorer)
         from PyQt5.QtWidgets import QLineEdit
         host.custom_tags_input = QLineEdit()
         host.custom_tags_input.setPlaceholderText("Add custom tags (comma separated) to append to filename")
@@ -395,6 +427,47 @@ class DetailsPanelBuilder:
             """
         )
         version_layout.addWidget(host.custom_tags_input)
+
+        # Downloaded filename display (visible only in Downloaded Explorer)
+        host.downloaded_filename_group = QGroupBox("Downloaded File")
+        host.downloaded_filename_group.setStyleSheet(
+            f"""
+            QGroupBox {{
+                color: {SECONDARY_TEXT.name()};
+                font-size: 10pt;
+                border: 1px solid {PRIMARY_COLOR.name()};
+                border-radius: 6px;
+                margin-top: 8px;
+            }}
+            QGroupBox::title {{
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px;
+            }}
+            """
+        )
+        downloaded_filename_layout = QVBoxLayout(host.downloaded_filename_group)
+        
+        host.downloaded_filename_label = QLabel()
+        host.downloaded_filename_label.setWordWrap(True)
+        host.downloaded_filename_label.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
+        host.downloaded_filename_label.setStyleSheet(
+            f"""
+            QLabel {{
+                background-color: {BACKGROUND_COLOR.name()};
+                color: {TEXT_COLOR.name()};
+                border: 1px solid #444;
+                border-radius: 4px;
+                padding: 8px;
+                font-family: Consolas, 'Courier New', monospace;
+            }}
+            """
+        )
+        host.downloaded_filename_label.setText("No file downloaded for this version")
+        downloaded_filename_layout.addWidget(host.downloaded_filename_label)
+        
+        host.downloaded_filename_group.setVisible(False)
+        version_layout.addWidget(host.downloaded_filename_group)
 
         details_layout.addWidget(version_group)
 

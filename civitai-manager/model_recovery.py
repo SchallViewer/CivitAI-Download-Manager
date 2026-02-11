@@ -7,12 +7,14 @@ import json
 import requests
 import time
 import math
+import webbrowser
+import tempfile
 from datetime import datetime
 from PyQt5.QtCore import QThread, pyqtSignal, QObject, Qt
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, 
     QProgressBar, QTextEdit, QTableWidget, QTableWidgetItem,
-    QComboBox, QMessageBox, QHeaderView
+    QComboBox, QMessageBox, QHeaderView, QFrame
 )
 from PyQt5.QtGui import QFont, QColor, QImage
 
@@ -217,6 +219,165 @@ class RecoveryWorker(QThread):
     def cancel_recovery(self):
         """Cancel the recovery process"""
         self.is_cancelled = True
+    
+    def export_html_visualizer(self, results_data):
+        """Export recovery results as an interactive HTML visualizer"""
+        try:
+            # Get the directory where this script is located
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            managers_dir = os.path.join(script_dir, 'managers')
+            
+            # Paths to template files
+            html_template_path = os.path.join(managers_dir, 'recovery_visualizer.html')
+            css_path = os.path.join(managers_dir, 'styles', 'recovery_visualizer.css')
+            js_path = os.path.join(managers_dir, 'scripts', 'recovery_visualizer.js')
+            
+            # Check if template files exist
+            if not all(os.path.exists(p) for p in [html_template_path, css_path, js_path]):
+                print("Warning: HTML template files not found, skipping HTML export")
+                return None
+            
+            # Read template files
+            with open(html_template_path, 'r', encoding='utf-8') as f:
+                html_content = f.read()
+            
+            with open(css_path, 'r', encoding='utf-8') as f:
+                css_content = f.read()
+            
+            with open(js_path, 'r', encoding='utf-8') as f:
+                js_content = f.read()
+            
+            # Process results data for HTML export
+            processed_results = []
+            total_size = 0
+            
+            for result in results_data.get('results', []):
+                # Extract file size from filename if available
+                file_path = result.get('filename', '')
+                file_size = 0
+                
+                try:
+                    if os.path.exists(file_path):
+                        file_size = os.path.getsize(file_path)
+                        total_size += file_size
+                except Exception:
+                    pass
+                
+                processed_result = {
+                    'filename': os.path.basename(result.get('filename', 'Unknown')),
+                    'filepath': result.get('filename', 'Unknown'),
+                    'status': result.get('status', 'Unknown'),
+                    'size': file_size,
+                    'details': result.get('details', 'No details available'),
+                    'modelId': result.get('model_id'),
+                    'versionId': result.get('version_id'),
+                    'modelName': result.get('model_name'),
+                    'duplicate_files': result.get('duplicate_files', [])  # Include duplicate files info
+                }
+                processed_results.append(processed_result)
+            
+            # Add duplicate files to results (enhance duplicate detection)
+            duplicate_hash_map = {}
+            
+            # First, build a map of hash to all files with that hash
+            for dup_file in results_data.get('duplicate_files', []):
+                try:
+                    file_hash = self.calculate_sha256(dup_file)
+                    if file_hash:
+                        if file_hash not in duplicate_hash_map:
+                            duplicate_hash_map[file_hash] = []
+                        duplicate_hash_map[file_hash].append(dup_file)
+                except Exception:
+                    pass
+            
+            # Now process each duplicate file with enhanced details
+            for dup_file in results_data.get('duplicate_files', []):
+                try:
+                    file_size = os.path.getsize(dup_file) if os.path.exists(dup_file) else 0
+                    total_size += file_size
+                    
+                    # Find other files with the same hash
+                    try:
+                        file_hash = self.calculate_sha256(dup_file)
+                        other_files = []
+                        if file_hash and file_hash in duplicate_hash_map:
+                            other_files = [f for f in duplicate_hash_map[file_hash] if f != dup_file]
+                    except Exception:
+                        other_files = []
+                    
+                    other_filenames = [os.path.basename(f) for f in other_files]
+                    
+                    if other_filenames:
+                        details = f'Duplicate file found. Same hash as: {", ".join(other_filenames)}'
+                    else:
+                        details = 'Duplicate file found in download directory'
+                    
+                except Exception:
+                    file_size = 0
+                    other_files = []
+                    details = 'Duplicate file found in download directory'
+
+                processed_results.append({
+                    'filename': os.path.basename(dup_file),
+                    'filepath': dup_file,
+                    'status': 'Duplicate',
+                    'size': file_size,
+                    'details': details,
+                    'modelId': None,
+                    'versionId': None,
+                    'modelName': None,
+                    'duplicate_files': other_files  # Include list of files with same hash
+                })            # Prepare statistics
+            statistics = {
+                'successful': results_data.get('successful', 0),
+                'failed': results_data.get('failed', 0),
+                'skipped': results_data.get('skipped', 0),
+                'duplicates': results_data.get('duplicates', 0),
+                'total': len(processed_results),
+                'totalSize': total_size,
+                'timestamp': datetime.now().isoformat()
+            }
+            
+            # Create data payload for JavaScript
+            recovery_data = {
+                'results': processed_results,
+                'statistics': statistics
+            }
+            
+            # Create self-contained HTML file
+            standalone_html = html_content.replace(
+                '<link rel="stylesheet" href="styles/recovery_visualizer.css">',
+                f'<style>{css_content}</style>'
+            ).replace(
+                '<script src="scripts/recovery_visualizer.js"></script>',
+                f'<script>{js_content}</script>'
+            )
+            
+            # Inject data into HTML
+            data_script = f"""
+            <script>
+                window.recoveryData = {json.dumps(recovery_data, indent=2)};
+            </script>
+            """
+            
+            # Insert data script before closing body tag
+            standalone_html = standalone_html.replace('</body>', f'{data_script}</body>')
+            
+            # Create output file in temp directory
+            output_dir = tempfile.gettempdir()
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_file = os.path.join(output_dir, f'civitai_recovery_results_{timestamp}.html')
+            
+            # Write the HTML file
+            with open(output_file, 'w', encoding='utf-8') as f:
+                f.write(standalone_html)
+            
+            print(f"HTML visualizer exported to: {output_file}")
+            return output_file
+            
+        except Exception as e:
+            print(f"Failed to export HTML visualizer: {e}")
+            return None
         
     def calculate_sha256(self, file_path):
         """Calculate SHA256 hash of a file"""
@@ -470,13 +631,19 @@ class RecoveryWorker(QThread):
                 # Skip if already processed this hash
                 if file_hash in processed_hashes:
                     print(f"[DEBUG] Skipping duplicate hash: {file_hash}")
+                    # Find other files with the same hash
+                    other_files = [f for f in hash_to_files[file_hash] if f != file_path]
+                    other_filenames = [os.path.basename(f) for f in other_files]
+                    
+                    details = f'Duplicate hash already processed. Same hash as: {", ".join(other_filenames)}'
                     self.results.append({
                         'filename': filename,
                         'status': 'Duplicate',
-                        'details': 'Duplicate hash already processed'
+                        'details': details,
+                        'duplicate_files': other_files  # Include list of files with same hash
                     })
                     self.skipped_count += 1
-                    self.model_processed.emit(filename, 'Duplicate', 'Duplicate hash already processed')
+                    self.model_processed.emit(filename, 'Duplicate', details)
                     continue
                 
                 # Skip if already in database
@@ -731,7 +898,8 @@ class RecoveryWorker(QThread):
                 # Commit the transaction on successful completion
                 self.commit_recovery()
                 
-                self.recovery_finished.emit({
+                # Prepare results data for emission
+                results_data = {
                     'success': True,
                     'successful': self.successful_count,
                     'failed': self.failed_count,
@@ -739,7 +907,15 @@ class RecoveryWorker(QThread):
                     'duplicates': len(duplicate_files),
                     'results': self.results,
                     'duplicate_files': duplicate_files
-                })
+                }
+                
+                # Export HTML visualizer
+                self.status_update.emit("Generating HTML visualizer...")
+                html_file = self.export_html_visualizer(results_data)
+                if html_file:
+                    results_data['html_file'] = html_file
+                
+                self.recovery_finished.emit(results_data)
                 
         except Exception as e:
             # Rollback on any error
@@ -762,6 +938,7 @@ class RecoveryProgressDialog(QDialog):
         self.setModal(True)
         self.setFixedSize(500, 200)
         self.worker = None
+        self.final_results = None  # Store the final results from worker
         
         self.setStyleSheet(f"""
             QDialog {{
@@ -832,6 +1009,7 @@ class RecoveryProgressDialog(QDialog):
         
     def recovery_finished(self, results):
         """Handle recovery completion"""
+        self.final_results = results  # Store the results from worker
         self.accept()
 
 
@@ -857,117 +1035,301 @@ class RecoveryResultsDialog(QDialog):
         
     def init_ui(self):
         layout = QVBoxLayout(self)
+        layout.setSpacing(20)
         
-        # Summary
-        summary_text = f"""
-Recovery Complete!
-
-Successfully recovered: {self.results.get('successful', 0)} models
-Failed recoveries: {self.results.get('failed', 0)} models  
-Skipped (already registered): {self.results.get('skipped', 0)} models
-Duplicate files found: {self.results.get('duplicates', 0)} files
-
-💡 Tip: Recovered models are now available in the Downloaded Explorer where you can view them with full metadata and images.
-        """
+        # Header with icon and title
+        header_layout = QHBoxLayout()
         
-        summary_label = QLabel(summary_text.strip())
-        summary_label.setFont(QFont("Segoe UI", 10, QFont.Bold))
-        summary_label.setStyleSheet(f"color: {PRIMARY_COLOR.name()}; margin: 10px;")
-        layout.addWidget(summary_label)
+        # Icon
+        icon_label = QLabel("🎯")
+        icon_label.setFont(QFont("Segoe UI", 24))
+        icon_label.setAlignment(Qt.AlignCenter)
+        icon_label.setFixedSize(60, 60)
+        icon_label.setStyleSheet(f"""
+            QLabel {{
+                background-color: {PRIMARY_COLOR.name()};
+                border-radius: 30px;
+                color: white;
+            }}
+        """)
+        header_layout.addWidget(icon_label)
         
-        # Filter combo
-        filter_layout = QHBoxLayout()
-        filter_layout.addWidget(QLabel("Filter results:"))
+        # Title and subtitle
+        title_layout = QVBoxLayout()
+        title_label = QLabel("Model Recovery Complete!")
+        title_label.setFont(QFont("Segoe UI", 18, QFont.Bold))
+        title_label.setStyleSheet(f"color: {PRIMARY_COLOR.name()};")
         
-        self.filter_combo = QComboBox()
-        self.filter_combo.addItems([
-            "All Results",
-            "Successful Recovery", 
-            "Failed Recovery",
-            "Skipped (Already Registered)",
-            "Duplicates Found"
-        ])
-        self.filter_combo.currentTextChanged.connect(self.filter_results)
-        filter_layout.addWidget(self.filter_combo)
-        filter_layout.addStretch()
+        subtitle_label = QLabel("Recovery process has finished successfully")
+        subtitle_label.setFont(QFont("Segoe UI", 11))
+        subtitle_label.setStyleSheet("color: #888888;")
         
-        layout.addLayout(filter_layout)
+        title_layout.addWidget(title_label)
+        title_layout.addWidget(subtitle_label)
+        title_layout.addStretch()
         
-        # Results table
-        self.table = QTableWidget()
-        self.table.setColumnCount(3)
-        self.table.setHorizontalHeaderLabels(["Filename", "Status", "Details"])
+        header_layout.addLayout(title_layout)
+        header_layout.addStretch()
+        layout.addLayout(header_layout)
         
-        # Set column widths
-        header = self.table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(1, QHeaderView.ResizeToContents) 
-        header.setSectionResizeMode(2, QHeaderView.Stretch)
-        
-        self.table.setStyleSheet("""
-            QTableWidget {
+        # Statistics Cards Grid
+        stats_frame = QFrame()
+        stats_frame.setFrameStyle(QFrame.Box)
+        stats_frame.setStyleSheet(f"""
+            QFrame {{
                 background-color: #2a2a2a;
                 border: 1px solid #444;
-                gridline-color: #444;
-            }
-            QTableWidget::item {
-                padding: 5px;
-                border-bottom: 1px solid #333;
-            }
-            QHeaderView::section {
-                background-color: #333;
-                color: white;
-                padding: 5px;
-                border: 1px solid #444;
-            }
+                border-radius: 8px;
+                padding: 16px;
+            }}
         """)
         
-        layout.addWidget(self.table)
+        stats_layout = QVBoxLayout(stats_frame)
+        stats_title = QLabel("📊 Recovery Statistics")
+        stats_title.setFont(QFont("Segoe UI", 14, QFont.Bold))
+        stats_title.setStyleSheet(f"color: {PRIMARY_COLOR.name()}; margin-bottom: 10px;")
+        stats_layout.addWidget(stats_title)
         
-        # Button layout
-        button_layout = QHBoxLayout()
+        # Statistics grid
+        stats_grid_layout = QHBoxLayout()
+        
+        # Create stat cards
+        stat_cards = [
+            ("✅", "Successfully Recovered", self.results.get('successful', 0), "#4caf50"),
+            ("❌", "Failed Recovery", self.results.get('failed', 0), "#f44336"),
+            ("⚠️", "Already Registered", self.results.get('skipped', 0), "#ff9800"),
+            ("📁", "Duplicates Found", self.results.get('duplicates', 0), "#9c27b0")
+        ]
+        
+        for icon, label, count, color in stat_cards:
+            card = self.create_stat_card(icon, label, count, color)
+            stats_grid_layout.addWidget(card)
+        
+        stats_layout.addLayout(stats_grid_layout)
+        layout.addWidget(stats_frame)
+        
+        # Key Actions Section
+        actions_frame = QFrame()
+        actions_frame.setFrameStyle(QFrame.Box)
+        actions_frame.setStyleSheet(f"""
+            QFrame {{
+                background-color: #2a2a2a;
+                border: 1px solid #444;
+                border-radius: 8px;
+                padding: 16px;
+            }}
+        """)
+        
+        actions_layout = QVBoxLayout(actions_frame)
+        actions_title = QLabel("🚀 Next Steps")
+        actions_title.setFont(QFont("Segoe UI", 14, QFont.Bold))
+        actions_title.setStyleSheet(f"color: {PRIMARY_COLOR.name()}; margin-bottom: 10px;")
+        actions_layout.addWidget(actions_title)
+        
+        # Action buttons grid
+        actions_grid = QVBoxLayout()
+        
+        # HTML Visualizer action (most prominent)
+        if self.results.get('html_file'):
+            html_action = self.create_action_item(
+                "📊", 
+                "Interactive Results Visualizer", 
+                "View detailed recovery results in an interactive table with filtering and export options",
+                "Open HTML Visualizer",
+                self.open_html_visualizer,
+                "#4caf50"
+            )
+            actions_grid.addWidget(html_action)
+        
+        # Downloaded Explorer action
+        if self.results.get('successful', 0) > 0:
+            explorer_action = self.create_action_item(
+                "📚",
+                "View in Downloaded Explorer",
+                "Browse your recovered models with full metadata and preview images",
+                "Open Downloaded Explorer",
+                self.open_downloaded_explorer,
+                "#2196f3"
+            )
+            actions_grid.addWidget(explorer_action)
+        
+        actions_layout.addLayout(actions_grid)
+        layout.addWidget(actions_frame)
+        
+        # Footer with buttons
+        footer_layout = QHBoxLayout()
         
         # Rollback button (only show if recovery was successful and worker available)
         if self.results.get('success') and self.worker and self.results.get('successful', 0) > 0:
-            rollback_button = QPushButton("Rollback Changes (Test)")
+            rollback_button = QPushButton("🔄 Rollback Changes (Test)")
             rollback_button.setStyleSheet("""
                 QPushButton {
                     background-color: #8b0000;
                     color: white;
-                    padding: 8px 20px;
-                    border-radius: 4px;
+                    padding: 12px 20px;
+                    border-radius: 6px;
                     font-weight: bold;
+                    font-size: 13px;
                 }
                 QPushButton:hover {
                     background-color: #a00000;
                 }
             """)
             rollback_button.clicked.connect(self.rollback_changes)
-            button_layout.addWidget(rollback_button)
+            footer_layout.addWidget(rollback_button)
         
-        button_layout.addStretch()
+        footer_layout.addStretch()
         
         # Close button
-        close_button = QPushButton("Close")
+        close_button = QPushButton("✖️ Close")
         close_button.setStyleSheet(f"""
             QPushButton {{
                 background-color: {PRIMARY_COLOR.name()};
                 color: white;
-                padding: 8px 20px;
-                border-radius: 4px;
+                padding: 12px 24px;
+                border-radius: 6px;
                 font-weight: bold;
+                font-size: 13px;
             }}
             QPushButton:hover {{
                 background-color: #9575cd;
             }}
         """)
         close_button.clicked.connect(self.accept)
-        button_layout.addWidget(close_button)
+        footer_layout.addWidget(close_button)
         
-        layout.addLayout(button_layout)
+        layout.addLayout(footer_layout)
+    
+    def create_stat_card(self, icon, label, count, color):
+        """Create a statistics card widget"""
+        card = QFrame()
+        card.setFrameStyle(QFrame.Box)
+        card.setStyleSheet(f"""
+            QFrame {{
+                background-color: #333333;
+                border: 1px solid {color};
+                border-radius: 6px;
+                padding: 12px;
+            }}
+        """)
         
-        # Load initial results
-        self.filter_results("All Results")
+        layout = QVBoxLayout(card)
+        layout.setAlignment(Qt.AlignCenter)
+        
+        # Icon
+        icon_label = QLabel(icon)
+        icon_label.setFont(QFont("Segoe UI", 20))
+        icon_label.setAlignment(Qt.AlignCenter)
+        icon_label.setStyleSheet(f"color: {color};")
+        layout.addWidget(icon_label)
+        
+        # Count
+        count_label = QLabel(str(count))
+        count_label.setFont(QFont("Segoe UI", 18, QFont.Bold))
+        count_label.setAlignment(Qt.AlignCenter)
+        count_label.setStyleSheet("color: white;")
+        layout.addWidget(count_label)
+        
+        # Label
+        text_label = QLabel(label)
+        text_label.setFont(QFont("Segoe UI", 9))
+        text_label.setAlignment(Qt.AlignCenter)
+        text_label.setWordWrap(True)
+        text_label.setStyleSheet("color: #cccccc;")
+        layout.addWidget(text_label)
+        
+        return card
+    
+    def create_action_item(self, icon, title, description, button_text, callback, color):
+        """Create an action item widget"""
+        item = QFrame()
+        item.setFrameStyle(QFrame.Box)
+        item.setStyleSheet("""
+            QFrame {
+                background-color: #333333;
+                border: 1px solid #555555;
+                border-radius: 6px;
+                padding: 16px;
+            }
+            QFrame:hover {
+                border-color: #777777;
+                background-color: #363636;
+            }
+        """)
+        
+        layout = QHBoxLayout(item)
+        
+        # Icon
+        icon_label = QLabel(icon)
+        icon_label.setFont(QFont("Segoe UI", 24))
+        icon_label.setAlignment(Qt.AlignCenter)
+        icon_label.setFixedSize(48, 48)
+        icon_label.setStyleSheet(f"""
+            QLabel {{
+                color: {color};
+                background-color: rgba(128, 128, 128, 0.1);
+                border-radius: 24px;
+            }}
+        """)
+        layout.addWidget(icon_label)
+        
+        # Content
+        content_layout = QVBoxLayout()
+        
+        title_label = QLabel(title)
+        title_label.setFont(QFont("Segoe UI", 12, QFont.Bold))
+        title_label.setStyleSheet("color: white;")
+        content_layout.addWidget(title_label)
+        
+        desc_label = QLabel(description)
+        desc_label.setFont(QFont("Segoe UI", 10))
+        desc_label.setStyleSheet("color: #aaaaaa;")
+        desc_label.setWordWrap(True)
+        content_layout.addWidget(desc_label)
+        
+        layout.addLayout(content_layout)
+        
+        # Button
+        action_button = QPushButton(button_text)
+        action_button.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {color};
+                color: white;
+                padding: 8px 16px;
+                border-radius: 4px;
+                font-weight: bold;
+                font-size: 11px;
+                min-width: 120px;
+            }}
+            QPushButton:hover {{
+                background-color: #66bb6a;
+            }}
+        """)
+        action_button.clicked.connect(callback)
+        layout.addWidget(action_button)
+        
+        return item
+    
+    def open_downloaded_explorer(self):
+        """Open the Downloaded Explorer to view recovered models"""
+        try:
+            # Get reference to main window
+            main_window = self.parent()
+            if main_window and hasattr(main_window, 'show_downloaded_explorer'):
+                self.accept()  # Close the dialog first
+                main_window.show_downloaded_explorer()
+            else:
+                QMessageBox.information(
+                    self,
+                    "Downloaded Explorer",
+                    "Please navigate to the Downloaded Explorer manually to view your recovered models."
+                )
+        except Exception as e:
+            QMessageBox.warning(
+                self,
+                "Could not open Downloaded Explorer",
+                f"Failed to open Downloaded Explorer: {str(e)}"
+            )
         
     def rollback_changes(self):
         """Rollback the recovery changes"""
@@ -1008,54 +1370,33 @@ Duplicate files found: {self.results.get('duplicates', 0)} files
                     "Failed to rollback recovery changes.\n\n"
                     "The database may be in an inconsistent state."
                 )
-        
-    def filter_results(self, filter_type):
-        """Filter and display results based on selected type"""
-        all_results = self.results.get('results', [])
-        duplicate_files = self.results.get('duplicate_files', [])
-        
-        if filter_type == "All Results":
-            filtered_results = all_results
-        elif filter_type == "Successful Recovery":
-            filtered_results = [r for r in all_results if r['status'] == 'Success']
-        elif filter_type == "Failed Recovery":
-            filtered_results = [r for r in all_results if r['status'] == 'Failed']
-        elif filter_type == "Skipped (Already Registered)":
-            filtered_results = [r for r in all_results if r['status'] == 'Skipped']
-        elif filter_type == "Duplicates Found":
-            # Show duplicate files
-            filtered_results = []
-            for file_path in duplicate_files:
-                filename = os.path.basename(file_path)
-                filtered_results.append({
-                    'filename': filename,
-                    'status': 'Duplicate',
-                    'details': f'Full path: {file_path}'
-                })
+    
+    def open_html_visualizer(self):
+        """Open the HTML visualizer in the default web browser"""
+        html_file = self.results.get('html_file')
+        if html_file and os.path.exists(html_file):
+            try:
+                webbrowser.open(f'file:///{html_file.replace(os.sep, "/")}')
+                QMessageBox.information(
+                    self,
+                    "HTML Visualizer Opened",
+                    f"The interactive recovery results visualizer has been opened in your default web browser.\n\n"
+                    f"File location: {html_file}\n\n"
+                    f"💡 Tip: You can bookmark this page or save the file for future reference."
+                )
+            except Exception as e:
+                QMessageBox.critical(
+                    self,
+                    "Failed to Open Visualizer",
+                    f"Could not open the HTML visualizer:\n{str(e)}\n\n"
+                    f"You can manually open the file:\n{html_file}"
+                )
         else:
-            filtered_results = all_results
-            
-        # Update table
-        self.table.setRowCount(len(filtered_results))
-        
-        for row, result in enumerate(filtered_results):
-            # Filename
-            filename_item = QTableWidgetItem(result['filename'])
-            self.table.setItem(row, 0, filename_item)
-            
-            # Status with color coding
-            status_item = QTableWidgetItem(result['status'])
-            if result['status'] == 'Success':
-                status_item.setBackground(QColor(144, 238, 144))  # Light green
-            elif result['status'] == 'Failed':
-                status_item.setBackground(QColor(255, 182, 193))  # Light red
-            elif result['status'] == 'Skipped':
-                status_item.setBackground(QColor(255, 255, 224))  # Light yellow
-            self.table.setItem(row, 1, status_item)
-            
-            # Details
-            details_item = QTableWidgetItem(result['details'])
-            self.table.setItem(row, 2, details_item)
+            QMessageBox.warning(
+                self,
+                "Visualizer Not Available",
+                "The HTML visualizer file is not available or was not generated successfully."
+            )
 
 
 class ModelRecoveryManager:
@@ -1097,43 +1438,31 @@ class ModelRecoveryManager:
         
         if progress_dialog.exec_() == QDialog.Accepted:
             # Recovery completed, get results from worker
-            if progress_dialog.worker:
-                # Wait for worker to finish
-                progress_dialog.worker.wait()
+            if progress_dialog.final_results:
+                # Use the actual results from the worker (includes html_file)
+                final_results = progress_dialog.final_results
                 
-                # Check if we have results to show
-                if hasattr(progress_dialog.worker, 'results'):
-                    final_results = {
-                        'success': True,
-                        'successful': progress_dialog.worker.successful_count,
-                        'failed': progress_dialog.worker.failed_count, 
-                        'skipped': progress_dialog.worker.skipped_count,
-                        'duplicates': len(progress_dialog.worker.duplicates),
-                        'results': progress_dialog.worker.results,
-                        'duplicate_files': progress_dialog.worker.duplicates
-                    }
-                    
-                    # Show results dialog with worker reference for rollback
-                    results_dialog = RecoveryResultsDialog(final_results, progress_dialog.worker, main)
-                    results_dialog.exec_()
-                    
-                    # Refresh downloaded models view if any were recovered
-                    if progress_dialog.worker.successful_count > 0:
-                        try:
-                            # Clear cached downloaded models to force refresh
-                            if hasattr(main, '_left_agg_downloaded'):
-                                delattr(main, '_left_agg_downloaded')
-                                
-                            # Refresh if currently viewing downloaded models
-                            if getattr(main, 'current_left_view', None) == 'downloaded':
-                                main.downloaded_manager.load_downloaded_models_left()
-                                
-                            main.status_bar.showMessage(
-                                f"Recovery complete: {progress_dialog.worker.successful_count} models recovered", 
-                                5000
-                            )
-                        except Exception as e:
-                            print(f"Error refreshing downloaded models: {e}")
+                # Show results dialog with worker reference for rollback
+                results_dialog = RecoveryResultsDialog(final_results, progress_dialog.worker, main)
+                results_dialog.exec_()
+                
+                # Refresh downloaded models view if any were recovered
+                if final_results.get('successful', 0) > 0:
+                    try:
+                        # Clear cached downloaded models to force refresh
+                        if hasattr(main, '_left_agg_downloaded'):
+                            delattr(main, '_left_agg_downloaded')
+                            
+                        # Refresh if currently viewing downloaded models
+                        if getattr(main, 'current_left_view', None) == 'downloaded':
+                            main.downloaded_manager.load_downloaded_models_left()
+                            
+                        main.status_bar.showMessage(
+                            f"Recovery complete: {final_results.get('successful', 0)} models recovered", 
+                            5000
+                        )
+                    except Exception as e:
+                        print(f"Error refreshing downloaded models: {e}")
         else:
             # Recovery was cancelled
             main.status_bar.showMessage("Model recovery cancelled", 3000)
