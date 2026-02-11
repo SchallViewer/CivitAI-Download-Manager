@@ -570,8 +570,7 @@ class DownloadedManager:
                     continue
 
             if selected_base_model:
-                base_model = self.filter_utils.get_base_model(md)
-                if not self.filter_utils.matches_base_model(base_model, selected_base_model):
+                if not self._matches_downloaded_base_model(md, selected_base_model):
                     continue
 
             if selected_tag and not self.filter_utils.has_tag(md, selected_tag):
@@ -616,6 +615,29 @@ class DownloadedManager:
                 main.status_bar.showMessage("No downloaded models match the selected filters")
             else:
                 main.status_bar.showMessage("No downloaded models found")
+
+    def _matches_downloaded_base_model(self, model_data, filter_base):
+        try:
+            if not filter_base:
+                return True
+
+            downloaded_versions = model_data.get('_downloaded_versions') or []
+            versions = model_data.get('modelVersions') or model_data.get('versions') or []
+
+            if downloaded_versions and versions:
+                for v in versions:
+                    if not isinstance(v, dict):
+                        continue
+                    vid = v.get('id') or v.get('version_id')
+                    if vid in downloaded_versions:
+                        base_model = v.get('baseModel') or v.get('base_model')
+                        if base_model and self.filter_utils.matches_base_model(str(base_model), filter_base):
+                            return True
+
+            base_model = self.filter_utils.get_base_model(model_data)
+            return self.filter_utils.matches_base_model(base_model, filter_base)
+        except Exception:
+            return True
 
     def render_all_immediately(self, models_list):
         """Render all cards immediately for small result sets."""
