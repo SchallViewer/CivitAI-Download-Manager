@@ -147,6 +147,7 @@ class DownloadedManager:
                 print("DEBUG: Saving original filter states")
                 main._original_sort_items = []
                 main._original_period_items = []
+                main._original_base_model_items = []
                 
                 # Save original sort combo items
                 for i in range(main.sort_combo.count()):
@@ -159,6 +160,12 @@ class DownloadedManager:
                     text = main.period_combo.itemText(i)
                     data = main.period_combo.itemData(i)
                     main._original_period_items.append((text, data))
+
+                # Save original base model combo items
+                for i in range(main.base_model_combo.count()):
+                    text = main.base_model_combo.itemText(i)
+                    data = main.base_model_combo.itemData(i)
+                    main._original_base_model_items.append((text, data))
                 
                 main._original_filters_saved = True
             
@@ -167,6 +174,7 @@ class DownloadedManager:
             try:
                 main.sort_combo.currentIndexChanged.disconnect()
                 main.period_combo.currentIndexChanged.disconnect()
+                main.base_model_combo.currentIndexChanged.disconnect()
             except:
                 pass
             
@@ -181,6 +189,19 @@ class DownloadedManager:
             main.sort_combo.clear()
             main.sort_combo.addItem("Newest", "newest")
             main.sort_combo.addItem("Title Name", "title")
+
+            # Update base model combo from downloaded versions
+            print("DEBUG: Updating base model combo with downloaded base models")
+            main.base_model_combo.clear()
+            main.base_model_combo.addItem("Any Base", None)
+            base_models = []
+            try:
+                if hasattr(main, 'db_manager'):
+                    base_models = main.db_manager.get_downloaded_base_models() or []
+            except Exception:
+                base_models = []
+            for bm in base_models:
+                main.base_model_combo.addItem(bm, bm)
             
             # Update period combo to show available tags
             print("DEBUG: Updating period combo with available tags")
@@ -199,6 +220,7 @@ class DownloadedManager:
             try:
                 main.sort_combo.currentIndexChanged.connect(main.handle_filter_change)
                 main.period_combo.currentIndexChanged.connect(main.handle_filter_change)
+                main.base_model_combo.currentIndexChanged.connect(main.handle_filter_change)
             except:
                 pass
                 
@@ -244,6 +266,7 @@ class DownloadedManager:
                 try:
                     main.sort_combo.currentIndexChanged.disconnect()
                     main.period_combo.currentIndexChanged.disconnect()
+                    main.base_model_combo.currentIndexChanged.disconnect()
                 except:
                     pass
                 
@@ -264,12 +287,19 @@ class DownloadedManager:
                 main.period_combo.clear()
                 for text, data in main._original_period_items:
                     main.period_combo.addItem(text, data)
+
+                # Restore base model combo
+                print("DEBUG: Restoring base model combo")
+                main.base_model_combo.clear()
+                for text, data in main._original_base_model_items:
+                    main.base_model_combo.addItem(text, data)
                 
                 # Reconnect signals after restore
                 print("DEBUG: Reconnecting filter signals")
                 try:
                     main.sort_combo.currentIndexChanged.connect(main.handle_filter_change)
                     main.period_combo.currentIndexChanged.connect(main.handle_filter_change)
+                    main.base_model_combo.currentIndexChanged.connect(main.handle_filter_change)
                 except:
                     pass
                     

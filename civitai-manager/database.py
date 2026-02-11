@@ -901,6 +901,27 @@ class DatabaseManager:
             pass
         return out
 
+    def get_downloaded_base_models(self):
+        """Return sorted list of base_model values for downloaded versions."""
+        try:
+            with self._lock:
+                cur = self.conn.cursor()
+                cur.execute(
+                    '''
+                    SELECT DISTINCT v.base_model
+                    FROM versions v
+                    JOIN downloads d ON d.version_id = v.version_id
+                    WHERE d.status IN ('Completed','Imported','Missing')
+                      AND v.base_model IS NOT NULL
+                      AND TRIM(v.base_model) <> ''
+                    ORDER BY v.base_model ASC
+                    '''
+                )
+                return [row[0] for row in cur.fetchall() if row and row[0]]
+        except Exception as e:
+            print(f"Database error fetching base models: {e}")
+            return []
+
     def delete_model_version(self, model_id: int, version_id: int):
         """Delete a specific model version:
         - Remove related file on disk if path recorded (ignore errors)
