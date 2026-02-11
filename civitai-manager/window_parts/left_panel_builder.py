@@ -66,6 +66,9 @@ class LeftPanelBuilder:
             f"QComboBox {{ background-color: {BACKGROUND_COLOR.name()}; color: {TEXT_COLOR.name()}; "
             f"border: 1px solid {PRIMARY_COLOR.name()}; border-radius: 4px; padding: 6px; }}"
             f"QComboBox::drop-down {{ border: none; }}"
+            f"QComboBox QAbstractItemView {{ background-color: #1f1f1f; color: {TEXT_COLOR.name()}; "
+            f"selection-background-color: {PRIMARY_COLOR.name()}; selection-color: {TEXT_COLOR.name()}; "
+            f"border: 1px solid {PRIMARY_COLOR.name()}; }}"
         )
 
         host.model_type_combo = QComboBox()
