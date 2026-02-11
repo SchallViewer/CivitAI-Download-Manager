@@ -311,6 +311,33 @@ class DatabaseManager:
             print(f"Database error checking downloaded: {e}")
             return False
 
+    def get_downloaded_file_info(self, model_id, version_id):
+        """Return latest file info for a downloaded model/version."""
+        try:
+            with self._lock:
+                cur = self.conn.cursor()
+                cur.execute(
+                    '''
+                    SELECT d.original_file_name, d.file_path
+                    FROM downloads d
+                    WHERE d.model_id = ? AND d.version_id = ?
+                      AND d.status IN ('Completed','Imported','Missing')
+                    ORDER BY d.download_date DESC LIMIT 1
+                    ''',
+                    (model_id, version_id),
+                )
+                row = cur.fetchone()
+                if not row:
+                    return None
+                original_file_name, file_path = row
+                return {
+                    'original_file_name': original_file_name,
+                    'file_path': file_path,
+                }
+        except Exception as e:
+            print(f"Database error fetching file info: {e}")
+            return None
+
     def get_downloaded_models(self):
         """Return a list of downloaded entries (one per model-version) with metadata and local images.
         Shape compatible with previous callers: each dict has keys
