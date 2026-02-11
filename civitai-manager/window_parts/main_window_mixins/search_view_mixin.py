@@ -129,6 +129,13 @@ class SearchViewMixin:
             pass
 
         try:
+            if hasattr(self, 'show_in_folder_btn'):
+                self.show_in_folder_btn.setVisible(False)
+                self.show_in_folder_btn.setEnabled(False)
+        except Exception:
+            pass
+
+        try:
             if getattr(self, '_search_cache', None):
                 try:
                     self.clear_model_grid()

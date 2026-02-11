@@ -1,5 +1,6 @@
 # details_mixin.py
 import os
+import subprocess
 from PyQt5.QtGui import QPixmap, QColor, QDesktopServices, QGuiApplication
 from PyQt5.QtCore import Qt, QUrl, QPropertyAnimation, QSequentialAnimationGroup
 from PyQt5.QtWidgets import QGraphicsColorizeEffect, QListWidgetItem
@@ -19,6 +20,12 @@ class DetailsMixin:
         self.right_panel.setCurrentIndex(0)
         try:
             self._showing_downloaded_details = False
+        except Exception:
+            pass
+        try:
+            if hasattr(self, 'show_in_folder_btn'):
+                self.show_in_folder_btn.setVisible(False)
+                self.show_in_folder_btn.setEnabled(False)
         except Exception:
             pass
 
@@ -369,6 +376,7 @@ class DetailsMixin:
                 if hasattr(self, 'custom_tags_input'):
                     if in_downloaded:
                         filename_text = "No file downloaded for this version"
+                        self._last_downloaded_file_path = None
                         try:
                             mid = (self.current_model or {}).get('id') or (self.current_model or {}).get('model_id')
                             vid = version.get('id') or version.get('version_id')
@@ -377,13 +385,25 @@ class DetailsMixin:
                                 if info:
                                     if info.get('file_path'):
                                         filename_text = os.path.basename(info.get('file_path'))
+                                        self._last_downloaded_file_path = info.get('file_path')
                                     elif info.get('original_file_name'):
                                         filename_text = info.get('original_file_name')
+                                        self._last_downloaded_file_path = self._resolve_downloaded_file_path(
+                                            info.get('original_file_name')
+                                        )
                         except Exception:
                             pass
                         self.custom_tags_input.setReadOnly(True)
                         self.custom_tags_input.setPlaceholderText("Downloaded filename")
                         self.custom_tags_input.setText(filename_text)
+                        try:
+                            if hasattr(self, 'show_in_folder_btn'):
+                                self.show_in_folder_btn.setVisible(True)
+                                self.show_in_folder_btn.setEnabled(
+                                    bool(getattr(self, '_last_downloaded_file_path', None))
+                                )
+                        except Exception:
+                            pass
                     else:
                         self.custom_tags_input.setReadOnly(False)
             except Exception:
@@ -401,8 +421,24 @@ class DetailsMixin:
                         except Exception:
                             is_downloaded = False
                         self.delete_version_btn.setEnabled(is_downloaded)
+                        try:
+                            if hasattr(self, 'show_in_folder_btn'):
+                                self.show_in_folder_btn.setVisible(True)
+                                if not is_downloaded:
+                                    self._last_downloaded_file_path = None
+                                self.show_in_folder_btn.setEnabled(
+                                    is_downloaded and bool(getattr(self, '_last_downloaded_file_path', None))
+                                )
+                        except Exception:
+                            pass
                     else:
                         self.delete_version_btn.setEnabled(False)
+                        try:
+                            if hasattr(self, 'show_in_folder_btn'):
+                                self.show_in_folder_btn.setVisible(False)
+                                self.show_in_folder_btn.setEnabled(False)
+                        except Exception:
+                            pass
             except Exception:
                 pass
 
@@ -506,6 +542,64 @@ class DetailsMixin:
             self.details_images_urls = urls[:5]
             self.details_image_index = 0
             self._load_details_image_by_index(self.details_image_index)
+
+    def _resolve_downloaded_file_path(self, filename_or_path):
+        try:
+            if not filename_or_path:
+                return None
+            if os.path.isabs(filename_or_path):
+                return os.path.normpath(filename_or_path)
+            try:
+                download_dir = self.settings_manager.get("download_dir")
+            except Exception:
+                download_dir = None
+            if download_dir:
+                expanded = os.path.expandvars(download_dir)
+                candidate = os.path.join(expanded, filename_or_path)
+                return os.path.normpath(candidate)
+        except Exception:
+            return None
+        return None
+
+    def show_model_in_folder(self):
+        try:
+            file_path = getattr(self, '_last_downloaded_file_path', None)
+            if not file_path and getattr(self, 'current_model', None) and getattr(self, 'current_version', None):
+                mid = (self.current_model or {}).get('id') or (self.current_model or {}).get('model_id')
+                vid = (self.current_version or {}).get('id') or (self.current_version or {}).get('version_id')
+                if mid and vid and hasattr(self, 'db_manager'):
+                    info = self.db_manager.get_downloaded_file_info(mid, vid)
+                    if info:
+                        file_path = info.get('file_path') or self._resolve_downloaded_file_path(
+                            info.get('original_file_name')
+                        )
+
+            if file_path and not os.path.isabs(file_path):
+                file_path = self._resolve_downloaded_file_path(file_path)
+
+            if file_path:
+                file_path = os.path.normpath(file_path)
+
+            if file_path and os.path.exists(file_path):
+                subprocess.run(["explorer", "/select,", file_path], check=False)
+                return
+
+            if file_path:
+                folder = os.path.dirname(file_path)
+                if folder and os.path.exists(folder):
+                    subprocess.run(["explorer", folder], check=False)
+                    return
+
+            try:
+                download_dir = self.settings_manager.get("download_dir")
+            except Exception:
+                download_dir = None
+            if download_dir:
+                folder = os.path.expandvars(download_dir)
+                if folder and os.path.exists(folder):
+                    subprocess.run(["explorer", folder], check=False)
+        except Exception:
+            pass
 
     def open_model_in_browser(self):
         if self.current_model:

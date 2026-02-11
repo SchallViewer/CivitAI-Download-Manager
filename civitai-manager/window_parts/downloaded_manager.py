@@ -493,6 +493,13 @@ class DownloadedManager:
                     main.downloaded_filename_group.setVisible(False)
             except Exception:
                 pass
+
+            try:
+                if hasattr(main, 'show_in_folder_btn'):
+                    main.show_in_folder_btn.setVisible(True)
+                    main.show_in_folder_btn.setEnabled(False)
+            except Exception:
+                pass
             
             # Show downloaded badge
             main.model_name.setText(main.model_name.text() + "  (Downloaded)")
