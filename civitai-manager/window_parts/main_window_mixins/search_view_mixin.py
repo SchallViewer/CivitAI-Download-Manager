@@ -123,6 +123,13 @@ class SearchViewMixin:
             pass
 
         try:
+            if hasattr(self, 'show_in_folder_btn'):
+                self.show_in_folder_btn.setVisible(False)
+                self.show_in_folder_btn.setEnabled(False)
+        except Exception:
+            pass
+
+        try:
             if hasattr(self, 'downloaded_filename_group'):
                 self.downloaded_filename_group.setVisible(False)
         except Exception:

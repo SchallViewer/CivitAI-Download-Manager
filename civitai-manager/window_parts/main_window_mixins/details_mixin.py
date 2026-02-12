@@ -1,5 +1,6 @@
 # details_mixin.py
 import os
+import subprocess
 from PyQt5.QtGui import QPixmap, QColor, QDesktopServices, QGuiApplication
 from PyQt5.QtCore import Qt, QUrl, QPropertyAnimation, QSequentialAnimationGroup
 from PyQt5.QtWidgets import QGraphicsColorizeEffect, QListWidgetItem
@@ -19,6 +20,10 @@ class DetailsMixin:
         self.right_panel.setCurrentIndex(0)
         try:
             self._showing_downloaded_details = False
+        except Exception:
+            pass
+        try:
+            self._update_show_in_folder_state()
         except Exception:
             pass
 
@@ -389,6 +394,10 @@ class DetailsMixin:
             except Exception:
                 pass
             try:
+                self._update_show_in_folder_state()
+            except Exception:
+                pass
+            try:
                 if getattr(self, 'delete_version_btn', None):
                     self.delete_version_btn.setVisible(in_downloaded)
                     if in_downloaded and self.current_model:
@@ -513,3 +522,52 @@ class DetailsMixin:
             if model_id:
                 url = f"https://civitai.com/models/{model_id}"
                 QDesktopServices.openUrl(QUrl(url))
+
+    def _get_downloaded_file_path_for_current(self):
+        try:
+            mid = (self.current_model or {}).get('id') or (self.current_model or {}).get('model_id')
+            vid = (self.current_version or {}).get('id') or (self.current_version or {}).get('version_id')
+            if not (mid and vid and hasattr(self, 'db_manager')):
+                return None
+            info = self.db_manager.get_downloaded_file_info(mid, vid)
+            if not info:
+                return None
+            file_path = info.get('file_path')
+            return file_path
+        except Exception:
+            return None
+
+    def _update_show_in_folder_state(self):
+        if not hasattr(self, 'show_in_folder_btn'):
+            return
+        in_downloaded = (
+            getattr(self, 'current_left_view', 'search') == 'downloaded'
+            or getattr(self, '_incoming_show_from_downloaded', False)
+        )
+        if not in_downloaded:
+            self.show_in_folder_btn.setVisible(False)
+            return
+
+        file_path = self._get_downloaded_file_path_for_current()
+        exists = bool(file_path and os.path.exists(file_path))
+        self.show_in_folder_btn.setVisible(True)
+        self.show_in_folder_btn.setEnabled(exists)
+
+    def show_model_in_folder(self):
+        file_path = self._get_downloaded_file_path_for_current()
+        if not file_path:
+            return
+
+        try:
+            if os.name == 'nt':
+                if os.path.isdir(file_path):
+                    subprocess.Popen(['explorer', file_path])
+                else:
+                    subprocess.Popen(['explorer', '/select,', os.path.normpath(file_path)])
+            else:
+                target = file_path
+                if not os.path.isdir(target):
+                    target = os.path.dirname(target)
+                QDesktopServices.openUrl(QUrl.fromLocalFile(target))
+        except Exception:
+            pass
