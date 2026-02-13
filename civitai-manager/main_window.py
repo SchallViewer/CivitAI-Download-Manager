@@ -16,10 +16,12 @@ from window_parts.main_window_mixins import (
     UiMixin,
     ConnectionsMixin,
     DelegationMixin,
+    DiagnosticsMixin,
     SearchMixin,
     SearchViewMixin,
     DetailsMixin,
     ImageMixin,
+    ModeMixin,
     HistoryMixin,
     LayoutMixin,
     SettingsMixin,
@@ -32,10 +34,12 @@ class MainWindow(
     UiMixin,
     ConnectionsMixin,
     DelegationMixin,
+    DiagnosticsMixin,
     SearchMixin,
     SearchViewMixin,
     DetailsMixin,
     ImageMixin,
+    ModeMixin,
     HistoryMixin,
     LayoutMixin,
     SettingsMixin,
@@ -88,6 +92,8 @@ class MainWindow(
         self.details_image_index = 0
         self.model_page = 1
         self.model_has_more = True
+        self._ui_generation = 0
+        self._details_image_generation = 0
         # cache last search metadata (list of model_data dicts)
         self._search_cache = []
 

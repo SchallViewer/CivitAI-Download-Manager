@@ -9,6 +9,7 @@ from ui_helpers import ImageLoaderThread
 
 class DetailsMixin:
     def show_model_details(self, model_data):
+        model_data = self._normalize_model_payload(model_data)
         self.current_model = model_data
         try:
             self._last_details_model_data = model_data
@@ -24,8 +25,8 @@ class DetailsMixin:
             pass
         try:
             self._update_show_in_folder_state()
-        except Exception:
-            pass
+        except Exception as e:
+            self._log_exception('details:update show_in_folder state (show_model_details)', e)
 
         if not getattr(self, '_suppress_details_initial_load', False):
             self.details_images_urls = self._collect_details_images(model_data, max_images=5)
@@ -33,14 +34,11 @@ class DetailsMixin:
             self._load_details_image_by_index(self.details_image_index)
 
         self.model_name.setText(model_data.get('name', 'Untitled Model'))
-        creator = model_data.get('creator') or {}
-        creator_name = (
-            creator.get('username') if isinstance(creator, dict) else str(creator) if creator else 'Unknown'
-        )
+        creator_name = model_data.get('creator_name', 'Unknown')
         self.model_creator.setText(f"by {creator_name}")
 
         try:
-            raw_type = model_data.get('type') or model_data.get('modelType') or model_data.get('model_type') or ''
+            raw_type = model_data.get('type') or ''
             type_map = {
                 'LORA': 'LoRA',
                 'Embeddings': 'Embedding',
@@ -98,9 +96,9 @@ class DetailsMixin:
             if isinstance(model_data.get('baseModel'), str):
                 base_model_name = model_data.get('baseModel')
             else:
-                versions = model_data.get('modelVersions') or model_data.get('versions') or []
+                versions = model_data.get('modelVersions') or []
                 if versions and isinstance(versions[0], dict):
-                    bm = versions[0].get('baseModel') or versions[0].get('base_model')
+                    bm = versions[0].get('baseModel')
                     if isinstance(bm, str):
                         base_model_name = bm
             try:
@@ -190,10 +188,10 @@ class DetailsMixin:
         self.ratings_count.setText(str(ratings))
         self.description.setHtml(model_data.get('description', 'No description available'))
 
-        base_model_val = model_data.get('baseModel') or model_data.get('base_model') or ''
+        base_model_val = model_data.get('baseModel') or ''
         self.model_base_model.setText(f"Base model: {base_model_val}" if base_model_val else "")
-        pub = self._extract_date(model_data, ('publishedAt', 'createdAt', 'created_at', 'published_at'))
-        upd = self._extract_date(model_data, ('updatedAt', 'updated_at'))
+        pub = self._extract_date(model_data, ('publishedAt',))
+        upd = self._extract_date(model_data, ('updatedAt',))
         self.model_published.setText(f"Published: {pub}" if pub else "")
         self.model_updated.setText(f"Updated: {upd}" if upd else "")
 
@@ -202,7 +200,8 @@ class DetailsMixin:
         model_id = model_data.get('id') if isinstance(model_data, dict) else None
         for version in versions:
             vname = version.get('name', 'Unknown')
-            vb = version.get('baseModel') or version.get('base_model') or ''
+            version = self._normalize_version_payload(version)
+            vb = version.get('baseModel') or ''
             extra = f" — base: {vb}" if vb else ''
             downloaded_flag = False
             try:
@@ -285,6 +284,14 @@ class DetailsMixin:
             self.prev_image_btn.setEnabled(index > 0)
             self.next_image_btn.setEnabled(index < len(self.details_images_urls) - 1)
 
+            try:
+                self._details_image_generation = int(getattr(self, '_details_image_generation', 0)) + 1
+                self._expected_details_generation = self._details_image_generation
+                self._expected_details_mode = getattr(self, 'current_left_view', 'search')
+            except Exception:
+                self._expected_details_generation = None
+                self._expected_details_mode = None
+
             self.details_image_attempts = set()
             headers = self.api.headers if hasattr(self, 'api') else None
             try:
@@ -310,6 +317,14 @@ class DetailsMixin:
         try:
             if target != self.model_image:
                 return
+
+            try:
+                expected_mode = getattr(self, '_expected_details_mode', None)
+                current_mode = getattr(self, 'current_left_view', 'search')
+                if expected_mode and expected_mode != current_mode:
+                    return
+            except Exception:
+                pass
 
             expected = getattr(self, '_expected_details_image', None)
             if expected and url != expected:
@@ -341,6 +356,9 @@ class DetailsMixin:
                                     tried.add(candidate)
                                     headers = self.api.headers if hasattr(self, 'api') else None
                                     try:
+                                        self._details_image_generation = int(getattr(self, '_details_image_generation', 0)) + 1
+                                        self._expected_details_generation = self._details_image_generation
+                                        self._expected_details_mode = getattr(self, 'current_left_view', 'search')
                                         self._expected_details_image = candidate
                                     except Exception:
                                         self._expected_details_image = None
@@ -367,7 +385,7 @@ class DetailsMixin:
     def version_selected(self):
         selected_items = self.version_list.selectedItems()
         if selected_items:
-            version = selected_items[0].data(Qt.UserRole)
+            version = self._normalize_version_payload(selected_items[0].data(Qt.UserRole))
             self.current_version = version
             in_downloaded = getattr(self, 'current_left_view', 'search') == 'downloaded'
             try:
@@ -395,8 +413,8 @@ class DetailsMixin:
                 pass
             try:
                 self._update_show_in_folder_state()
-            except Exception:
-                pass
+            except Exception as e:
+                self._log_exception('details:update show_in_folder state (version_selected)', e)
             try:
                 if getattr(self, 'delete_version_btn', None):
                     self.delete_version_btn.setVisible(in_downloaded)
@@ -447,11 +465,11 @@ class DetailsMixin:
                 self.security_warning_label.setVisible(False)
                 self.download_btn.setEnabled(True)
             self.details_image_attempts = set()
-            vb = version.get('baseModel') or version.get('base_model') or ''
+            vb = version.get('baseModel') or ''
             if vb:
                 self.model_base_model.setText(f"Base model: {vb}")
-            pubv = self._extract_date(version, ('publishedAt', 'createdAt', 'created_at', 'published_at'))
-            updv = self._extract_date(version, ('updatedAt', 'updated_at'))
+            pubv = self._extract_date(version, ('publishedAt',))
+            updv = self._extract_date(version, ('updatedAt',))
             self.model_published.setText(
                 f"Published: {pubv}" if pubv else self.model_published.text()
             )
@@ -534,7 +552,8 @@ class DetailsMixin:
                 return None
             file_path = info.get('file_path')
             return file_path
-        except Exception:
+        except Exception as e:
+            self._log_exception('details:get_downloaded_file_path_for_current', e)
             return None
 
     def _update_show_in_folder_state(self):
@@ -569,5 +588,5 @@ class DetailsMixin:
                 if not os.path.isdir(target):
                     target = os.path.dirname(target)
                 QDesktopServices.openUrl(QUrl.fromLocalFile(target))
-        except Exception:
-            pass
+        except Exception as e:
+            self._log_exception('details:show_model_in_folder', e)

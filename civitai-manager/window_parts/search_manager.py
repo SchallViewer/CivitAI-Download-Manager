@@ -98,21 +98,9 @@ class ProgressiveRenderer(QObject):
                 
                 if img_url:
                     try:
-                        from ui_helpers import ImageLoaderThread
-                        headers = main.api.headers if hasattr(main, 'api') else None
-                        print(f"ProgressiveRenderer: Creating ImageLoaderThread for {img_url}")
-                        
-                        # Set expected URL on card for stale response handling
-                        try:
-                            setattr(card, '_expected_image_url', img_url)
-                        except Exception:
-                            pass
-                            
-                        thread = ImageLoaderThread(img_url, card, headers=headers)
-                        thread.image_loaded.connect(main.set_card_image)  # Use main window's handler
-                        thread.start()
-                        main.image_loader_threads.append(thread)
-                        print(f"ProgressiveRenderer: ImageLoaderThread started successfully")
+                        print(f"ProgressiveRenderer: Loading image via main.load_model_image for {img_url}")
+                        main.load_model_image(card, img_url)
+                        print("ProgressiveRenderer: load_model_image queued successfully")
                     except Exception as e:
                         print(f"ProgressiveRenderer: Error creating ImageLoaderThread: {e}")
                 else:

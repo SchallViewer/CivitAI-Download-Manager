@@ -4,6 +4,20 @@ import os
 from PyQt5.QtCore import QSettings
 
 class SettingsManager:
+    MODEL_PATH_TYPES = [
+        "Checkpoint",
+        "LORA",
+        "TextualInversion",
+        "Hypernetwork",
+        "AestheticGradient",
+        "VAE",
+        "Upscaler",
+        "Controlnet",
+        "LoCon",
+        "Poses",
+        "Textures",
+    ]
+
     def __init__(self):
         self.settings = QSettings("CivitaiManager", "DownloadManager")
         # location of external JSON config (parent directory of this package)
@@ -11,6 +25,9 @@ class SettingsManager:
         self.defaults = {
             "api_key": "",
             "download_dir": os.path.expanduser("~/CivitaiDownloads"),
+            "model_download_paths": json.dumps([
+                {"model_type": "Checkpoint", "download_dir": ""}
+            ]),
             "max_concurrent": 3,
             "nsfw_filter": True,
             "auto_import": True,
@@ -108,6 +125,73 @@ class SettingsManager:
         self.settings.sync()
         self._write_external_config()
 
+    def get_model_download_paths(self):
+        """Return list of per-model-type download path definitions."""
+        raw = self.get("model_download_paths")
+        default_rows = [{"model_type": "Checkpoint", "download_dir": ""}]
+        try:
+            if isinstance(raw, list):
+                data = raw
+            else:
+                data = json.loads(raw) if isinstance(raw, str) and raw.strip() else default_rows
+        except Exception:
+            data = default_rows
+
+        cleaned = []
+        seen = set()
+        for row in data or []:
+            if not isinstance(row, dict):
+                continue
+            mt = str(row.get("model_type") or "").strip()
+            dd = str(row.get("download_dir") or "").strip()
+            if not mt:
+                continue
+            key = mt.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            cleaned.append({"model_type": mt, "download_dir": dd})
+
+        if not cleaned:
+            cleaned = default_rows
+        return cleaned
+
+    def set_model_download_paths(self, definitions):
+        """Persist per-model-type download path definitions."""
+        if not isinstance(definitions, list):
+            definitions = []
+
+        cleaned = []
+        seen = set()
+        for row in definitions:
+            if not isinstance(row, dict):
+                continue
+            mt = str(row.get("model_type") or "").strip()
+            dd = str(row.get("download_dir") or "").strip()
+            if not mt:
+                continue
+            key = mt.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            cleaned.append({"model_type": mt, "download_dir": dd})
+
+        if not cleaned:
+            cleaned = [{"model_type": "Checkpoint", "download_dir": ""}]
+
+        self.set("model_download_paths", json.dumps(cleaned, ensure_ascii=False))
+
+    def get_download_dir_for_model_type(self, model_type: str):
+        """Return configured download directory for a specific model type, or None if undefined."""
+        target = str(model_type or "").strip().lower()
+        if not target:
+            return None
+        for row in self.get_model_download_paths():
+            mt = str(row.get("model_type") or "").strip().lower()
+            if mt == target:
+                return str(row.get("download_dir") or "").strip()
+        return None
+
     def delete_api_key(self) -> None:
         """Remove the api_key from QSettings (registry) and persist changes."""
         try:
@@ -129,7 +213,8 @@ class SettingsManager:
                 # Map legacy keys if needed
                 key_map = {
                     'download_folder': 'download_dir',
-                    'priority_tags': 'priority_tags'
+                    'priority_tags': 'priority_tags',
+                    'model_download_paths': 'model_download_paths',
                 }
                 for legacy, new_key in key_map.items():
                     if legacy in data and data[legacy] is not None:
@@ -154,6 +239,7 @@ class SettingsManager:
                     out[key] = self.get(key)
             # ensure priority_tags present even if empty
             out.setdefault('priority_tags', self.defaults['priority_tags'])
+            out['model_download_paths'] = self.get_model_download_paths()
             # record the registry path where secrets (api_key) are stored
             out['registry_path'] = r"HKCU\\Software\\CivitaiManager\\DownloadManager"
             with open(path, 'w', encoding='utf-8') as f:

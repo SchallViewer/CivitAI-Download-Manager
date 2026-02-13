@@ -14,6 +14,27 @@ class DownloadHandler:
     def __init__(self, main_window):
         self.main_window = main_window
         self.utils = ModelDataUtils()
+
+    def _canonical_model_type(self, raw_type):
+        t = str(raw_type or "").strip().lower()
+        mapping = {
+            "checkpoint": "Checkpoint",
+            "lora": "LORA",
+            "textualinversion": "TextualInversion",
+            "textual inversion": "TextualInversion",
+            "embedding": "TextualInversion",
+            "embeddings": "TextualInversion",
+            "hypernetwork": "Hypernetwork",
+            "aestheticgradient": "AestheticGradient",
+            "aesthetic gradient": "AestheticGradient",
+            "vae": "VAE",
+            "upscaler": "Upscaler",
+            "controlnet": "Controlnet",
+            "locon": "LoCon",
+            "poses": "Poses",
+            "textures": "Textures",
+        }
+        return mapping.get(t, str(raw_type or "").strip())
     
     def download_selected_version(self):
         """Download the currently selected model version."""
@@ -32,15 +53,32 @@ class DownloadHandler:
             pass
         
         print("DEBUG: Starting download process")
-        
-        # Get download directory
-        download_dir = main.settings_manager.get("download_dir")
-        if not os.path.exists(download_dir):
-            try:
-                os.makedirs(download_dir)
-            except Exception:
-                print("DEBUG: Could not create download directory")
-                return
+
+        # Resolve download directory by model type definition
+        model_type_raw = (main.current_model or {}).get('type') or (main.current_model or {}).get('modelType') or (main.current_model or {}).get('model_type')
+        model_type = self._canonical_model_type(model_type_raw)
+        download_dir = None
+        try:
+            download_dir = main.settings_manager.get_download_dir_for_model_type(model_type)
+        except Exception:
+            download_dir = None
+
+        if not download_dir:
+            QMessageBox.critical(
+                main,
+                "Download Error",
+                f"No download folder is configured for model type '{model_type}'.\n\n"
+                "Open Settings -> Download Configuration -> Per Model Paths... and configure a valid folder."
+            )
+            return
+        if not os.path.isdir(download_dir):
+            QMessageBox.critical(
+                main,
+                "Download Error",
+                f"Configured download folder for '{model_type}' is invalid:\n{download_dir}\n\n"
+                "Please update it in Settings -> Download Configuration -> Per Model Paths..."
+            )
+            return
         
         model_name = main.current_model.get('name', 'model')
         version_name = main.current_version.get('name', 'version')

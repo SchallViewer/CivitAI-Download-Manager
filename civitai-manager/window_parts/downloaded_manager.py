@@ -57,34 +57,20 @@ class DownloadedManager:
         # Update current view
         print("DEBUG: Setting current_left_view to 'downloaded'")
         try:
-            main.current_left_view = 'downloaded'
-        except Exception:
-            main.current_left_view = 'downloaded'
-
-        try:
             if hasattr(main, 'custom_tags_input'):
                 main._saved_custom_tags = main.custom_tags_input.text()
-                main.custom_tags_input.setReadOnly(True)
-                main.custom_tags_input.setPlaceholderText("Select a version to view filename")
-                main.custom_tags_input.setText("")
         except Exception:
             pass
+        try:
+            if hasattr(main, 'enter_downloaded_mode'):
+                main.enter_downloaded_mode()
+            else:
+                main.current_left_view = 'downloaded'
+        except Exception:
+            main.current_left_view = 'downloaded'
         
-        # Update UI appearance
+        # UI appearance is now centralized by mode controller
         print("DEBUG: Updating UI appearance for downloaded mode")
-        try:
-            main.title_label.setText("Downloaded Models")
-            from constants import CARD_BACKGROUND
-            main.title_container.setStyleSheet(f"background-color: {CARD_BACKGROUND.name()}; border-radius: 6px; padding: 10px;")
-        except Exception:
-            pass
-        
-        # Clear search input to avoid confusion (will be used for filtering now)
-        print("DEBUG: Setting search input placeholder for downloaded mode")
-        try:
-            main.search_input.setPlaceholderText("Filter downloaded models...")
-        except Exception:
-            pass
         
         # Load downloaded models first
         print("DEBUG: Loading downloaded models")

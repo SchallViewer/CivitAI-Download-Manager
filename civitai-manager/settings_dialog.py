@@ -7,12 +7,14 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtGui import QIcon,QFont
 from settings import SettingsManager
 from constants import PRIMARY_COLOR, BACKGROUND_COLOR, TEXT_COLOR
+from model_path_settings_dialog import ModelPathSettingsDialog
 
 
 class SettingsDialog(QDialog):
     def __init__(self, settings_manager, parent=None):
         super().__init__(parent)
         self.settings_manager = settings_manager
+        self.model_download_paths = self.settings_manager.get_model_download_paths()
         self.setWindowTitle("Settings")
         self.setWindowIcon(QIcon("icons/settings.png"))
         # Make dialog larger and resizable to accommodate new sections
@@ -120,7 +122,35 @@ class SettingsDialog(QDialog):
         """)
         browse_button.clicked.connect(self.browse_directory)
         download_dir_layout.addWidget(browse_button)
-        download_layout.addRow("Download Folder:", download_dir_layout)
+        label_row = QWidget()
+        label_row_layout = QHBoxLayout(label_row)
+        label_row_layout.setContentsMargins(0, 0, 0, 0)
+        label_row_layout.setSpacing(8)
+        label_row_layout.addWidget(QLabel("Download Folder:"))
+
+        self.model_paths_button = QPushButton("Per Model Paths...")
+        self.model_paths_button.clicked.connect(self.open_model_path_settings)
+        self.model_paths_button.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {PRIMARY_COLOR.name()};
+                color: white;
+                padding: 6px;
+                border-radius: 4px;
+            }}
+            QPushButton:hover {{
+                background-color: #9575cd;
+            }}
+        """)
+        label_row_layout.addWidget(self.model_paths_button)
+        label_row_layout.addStretch()
+
+        download_layout.addRow(label_row, download_dir_layout)
+
+        self.model_paths_summary = QLabel()
+        self.model_paths_summary.setStyleSheet("color: #aaaaaa; font-size: 11px;")
+        self.model_paths_summary.setWordWrap(True)
+        download_layout.addRow(self.model_paths_summary)
+        self.refresh_model_paths_summary()
         layout.addLayout(download_layout)
         
         # Tag Priority section
@@ -269,6 +299,22 @@ class SettingsDialog(QDialog):
         )
         if directory:
             self.images_dir_input.setText(directory)
+
+    def open_model_path_settings(self):
+        dlg = ModelPathSettingsDialog(self.model_download_paths, self)
+        if dlg.exec_() == QDialog.Accepted:
+            self.model_download_paths = dlg.get_definitions()
+            self.refresh_model_paths_summary()
+
+    def refresh_model_paths_summary(self):
+        defs = self.model_download_paths or []
+        if not defs:
+            self.model_paths_summary.setText("No model-type paths configured.")
+            return
+        non_empty = [d for d in defs if str(d.get("download_dir") or "").strip()]
+        self.model_paths_summary.setText(
+            f"Configured model-type folders: {len(defs)} entries ({len(non_empty)} with valid path set)."
+        )
         
     
     def export_history(self):
@@ -363,6 +409,7 @@ Do you want to start the model recovery process?
     def save_settings(self):
         self.settings_manager.set("api_key", self.api_key_input.text())
         self.settings_manager.set("download_dir", self.download_dir_input.text())
+        self.settings_manager.set_model_download_paths(self.model_download_paths)
     # popular period removed
         # priority tags and aliases
         tags = []

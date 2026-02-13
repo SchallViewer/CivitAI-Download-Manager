@@ -29,13 +29,14 @@ class SearchViewMixin:
         if current_view == 'downloaded':
             try:
                 self.progressive_render_timer.stop()
-            except Exception:
-                pass
+            except Exception as e:
+                self._log_exception('search_view:stop progressive_render_timer', e)
 
             try:
                 self.download_filter_timer.stop()
                 self.download_filter_timer.start(300)
-            except Exception:
+            except Exception as e:
+                self._log_exception('search_view:start download_filter_timer', e)
                 self.downloaded_manager.filter_downloaded_models()
         else:
             print("DEBUG: In search explorer - text changed (no immediate action)")
@@ -54,17 +55,21 @@ class SearchViewMixin:
 
         try:
             print("DEBUG: Setting current_left_view to 'search'")
-            self.current_left_view = 'search'
-            self.title_label.setText("Model Explorer")
-            self.title_container.setStyleSheet(
-                f"background-color: {PRIMARY_COLOR.name()}; border-radius: 6px; padding: 10px;"
-            )
-        except Exception:
-            pass
+            if hasattr(self, 'enter_search_mode'):
+                self.enter_search_mode()
+            else:
+                self.current_left_view = 'search'
+                self.title_label.setText("Model Explorer")
+                self.title_container.setStyleSheet(
+                    f"background-color: {PRIMARY_COLOR.name()}; border-radius: 6px; padding: 10px;"
+                )
+        except Exception as e:
+            self._log_exception('search_view:enter_search_mode', e)
 
         try:
             print("DEBUG: Updating search input placeholder")
-            self.search_input.setPlaceholderText("Search models...")
+            if not hasattr(self, 'enter_search_mode'):
+                self.search_input.setPlaceholderText("Search models...")
         except Exception:
             pass
 
@@ -72,7 +77,7 @@ class SearchViewMixin:
             print("DEBUG: Restoring search filters")
             self.downloaded_manager.restore_search_filters()
         except Exception as e:
-            print(f"DEBUG: Error restoring search filters: {e}")
+            self._log_exception('search_view:restore_search_filters', e)
 
         try:
             print("DEBUG: Re-enabling search functionality")
@@ -98,40 +103,40 @@ class SearchViewMixin:
             self.search_input.returnPressed.connect(self.handle_search_input)
 
         except Exception as e:
-            print(f"Error re-enabling search functionality: {e}")
+            self._log_exception('search_view:reconnect search handlers', e)
 
         try:
-            self.download_btn.setVisible(True)
-            self.download_btn.setEnabled(bool(getattr(self, 'current_version', None)))
+            if not hasattr(self, 'enter_search_mode'):
+                self.download_btn.setVisible(True)
+                self.download_btn.setEnabled(bool(getattr(self, 'current_version', None)))
         except Exception:
             pass
 
         try:
-            if hasattr(self, 'custom_tags_input'):
-                self.custom_tags_input.setReadOnly(False)
-                self.custom_tags_input.setPlaceholderText(
-                    "Add custom tags (comma separated) to append to filename"
-                )
-                if hasattr(self, '_saved_custom_tags'):
-                    self.custom_tags_input.setText(self._saved_custom_tags or "")
+            if not hasattr(self, 'enter_search_mode'):
+                if hasattr(self, 'custom_tags_input'):
+                    self.custom_tags_input.setReadOnly(False)
+                    self.custom_tags_input.setPlaceholderText(
+                        "Add custom tags (comma separated) to append to filename"
+                    )
+                    if hasattr(self, '_saved_custom_tags'):
+                        self.custom_tags_input.setText(self._saved_custom_tags or "")
         except Exception:
             pass
 
         try:
-            self.delete_version_btn.setVisible(False)
+            if not hasattr(self, 'enter_search_mode'):
+                self.delete_version_btn.setVisible(False)
         except Exception:
             pass
 
         try:
-            if hasattr(self, 'show_in_folder_btn'):
-                self.show_in_folder_btn.setVisible(False)
-                self.show_in_folder_btn.setEnabled(False)
-        except Exception:
-            pass
-
-        try:
-            if hasattr(self, 'downloaded_filename_group'):
-                self.downloaded_filename_group.setVisible(False)
+            if not hasattr(self, 'enter_search_mode'):
+                if hasattr(self, 'show_in_folder_btn'):
+                    self.show_in_folder_btn.setVisible(False)
+                    self.show_in_folder_btn.setEnabled(False)
+                if hasattr(self, 'downloaded_filename_group'):
+                    self.downloaded_filename_group.setVisible(False)
         except Exception:
             pass
 

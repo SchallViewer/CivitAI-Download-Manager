@@ -2,6 +2,12 @@
 
 
 class UtilsMixin:
+    def _normalize_model_payload(self, model):
+        return self.utils.normalize_model_payload(model)
+
+    def _normalize_version_payload(self, version):
+        return self.utils.normalize_version_payload(version)
+
     def _extract_image_url(self, model):
         return self.utils.extract_image_url(model)
 
