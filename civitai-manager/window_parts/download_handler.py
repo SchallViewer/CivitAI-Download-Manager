@@ -57,6 +57,22 @@ class DownloadHandler:
         # Resolve download directory by model type definition
         model_type_raw = (main.current_model or {}).get('type') or (main.current_model or {}).get('modelType') or (main.current_model or {}).get('model_type')
         model_type = self._canonical_model_type(model_type_raw)
+
+        is_enabled = False
+        try:
+            is_enabled = bool(main.settings_manager.is_model_type_enabled(model_type))
+        except Exception:
+            is_enabled = False
+
+        if not is_enabled:
+            QMessageBox.critical(
+                main,
+                "Download Error",
+                f"Downloads for model type '{model_type}' are disabled.\n\n"
+                "Open Settings -> Download Configuration -> ... and enable/configure this model type."
+            )
+            return
+
         download_dir = None
         try:
             download_dir = main.settings_manager.get_download_dir_for_model_type(model_type)
@@ -68,7 +84,7 @@ class DownloadHandler:
                 main,
                 "Download Error",
                 f"No download folder is configured for model type '{model_type}'.\n\n"
-                "Open Settings -> Download Configuration -> Per Model Paths... and configure a valid folder."
+                "Open Settings -> Download Configuration -> ... and configure a valid folder."
             )
             return
         if not os.path.isdir(download_dir):
@@ -76,7 +92,7 @@ class DownloadHandler:
                 main,
                 "Download Error",
                 f"Configured download folder for '{model_type}' is invalid:\n{download_dir}\n\n"
-                "Please update it in Settings -> Download Configuration -> Per Model Paths..."
+                "Please update it in Settings -> Download Configuration -> ..."
             )
             return
         

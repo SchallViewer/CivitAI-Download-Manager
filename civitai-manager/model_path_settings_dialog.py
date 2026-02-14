@@ -154,6 +154,12 @@ class ModelPathSettingsDialog(QDialog):
         self._build_ui()
         self._render_rows()
 
+    def _debug(self, message):
+        try:
+            print(f"DEBUG: ModelPathSettingsDialog - {message}")
+        except Exception:
+            pass
+
     def _build_ui(self):
         layout = QVBoxLayout(self)
 
@@ -198,6 +204,7 @@ class ModelPathSettingsDialog(QDialog):
                 widget.deleteLater()
 
     def _render_rows(self):
+        self._debug(f"Rendering rows (count={len(self._definitions)})")
         self._clear_rows()
         for idx, row in enumerate(self._definitions):
             frame = QFrame()
@@ -221,8 +228,15 @@ class ModelPathSettingsDialog(QDialog):
             r.addWidget(edit_btn)
 
             remove_btn = QPushButton("Remove")
-            remove_btn.setStyleSheet("QPushButton { background-color: #8b0000; color: white; border-radius: 4px; padding: 6px 10px; }")
+            remove_btn.setStyleSheet(
+                "QPushButton { background-color: #8b0000; color: white; border-radius: 4px; padding: 6px 10px; }"
+                "QPushButton:disabled { background-color: #555555; color: #bcbcbc; }"
+            )
             remove_btn.clicked.connect(lambda checked=False, i=idx: self._remove_entry(i))
+            can_remove = len(self._definitions) > 1
+            remove_btn.setEnabled(can_remove)
+            if not can_remove:
+                remove_btn.setToolTip("At least one definition is required")
             r.addWidget(remove_btn)
 
             self.rows_container.addWidget(frame)
@@ -238,18 +252,25 @@ class ModelPathSettingsDialog(QDialog):
         return [opt for opt in MODEL_TYPE_OPTIONS if opt.lower() not in used]
 
     def _add_entry(self):
+        self._debug("Add entry requested")
         options = self._available_types()
         if not options:
+            self._debug("No model types available to add")
             QMessageBox.information(self, "No Types Available", "All model types already have a configured entry.")
             return
         dlg = ModelPathEntryDialog(options, parent=self)
         if dlg.exec_() == QDialog.Accepted:
+            self._debug("Add entry accepted")
             self._definitions.append(dlg.get_value())
             self._render_rows()
+        else:
+            self._debug("Add entry canceled")
 
     def _edit_entry(self, index):
         if index < 0 or index >= len(self._definitions):
+            self._debug(f"Edit entry ignored for invalid index={index}")
             return
+        self._debug(f"Edit entry requested for index={index}")
         current = self._definitions[index]
         options = [current.get("model_type")] + self._available_types(include_current=current.get("model_type"))
         # keep order stable and dedupe
@@ -263,15 +284,21 @@ class ModelPathSettingsDialog(QDialog):
 
         dlg = ModelPathEntryDialog(dedup, initial=current, parent=self)
         if dlg.exec_() == QDialog.Accepted:
+            self._debug(f"Edit entry accepted for index={index}")
             self._definitions[index] = dlg.get_value()
             self._render_rows()
+        else:
+            self._debug(f"Edit entry canceled for index={index}")
 
     def _remove_entry(self, index):
         if index < 0 or index >= len(self._definitions):
+            self._debug(f"Remove entry ignored for invalid index={index}")
             return
+        if len(self._definitions) <= 1:
+            self._debug("Remove entry blocked: only one definition remains")
+            return
+        self._debug(f"Remove entry accepted for index={index}")
         del self._definitions[index]
-        if not self._definitions:
-            self._definitions = [{"model_type": "Checkpoint", "download_dir": ""}]
         self._render_rows()
 
     def get_definitions(self):

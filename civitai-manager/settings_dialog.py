@@ -1,11 +1,10 @@
 # settings_dialog.py
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QFormLayout, QLineEdit, QPushButton,
-    QFileDialog, QDialogButtonBox, QHBoxLayout, QLabel, QComboBox,
+    QDialogButtonBox, QHBoxLayout, QLabel,
     QListWidget, QListWidgetItem, QWidget, QAbstractItemView
 )
 from PyQt5.QtGui import QIcon,QFont
-from settings import SettingsManager
 from constants import PRIMARY_COLOR, BACKGROUND_COLOR, TEXT_COLOR
 from model_path_settings_dialog import ModelPathSettingsDialog
 
@@ -93,42 +92,21 @@ class SettingsDialog(QDialog):
         download_layout.setVerticalSpacing(15)
         
         download_dir_layout = QHBoxLayout()
-        download_dir = self.settings_manager.get("download_dir", "")
-        self.download_dir_input = QLineEdit()
-        self.download_dir_input.setText(download_dir or "")
-        self.download_dir_input.setText(self.settings_manager.get("download_dir"))
-        self.download_dir_input.setStyleSheet(f"""
-            QLineEdit {{
-                background-color: #2a2a2a;
-                color: {TEXT_COLOR.name()};
-                border: 1px solid {PRIMARY_COLOR.name()};
-                border-radius: 4px;
-                padding: 8px;
-            }}
-        """)
-        download_dir_layout.addWidget(self.download_dir_input)
-        
-        browse_button = QPushButton("Browse...")
-        browse_button.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {PRIMARY_COLOR.name()};
-                color: white;
-                padding: 8px;
-                border-radius: 4px;
-            }}
-            QPushButton:hover {{
-                background-color: #9575cd;
-            }}
-        """)
-        browse_button.clicked.connect(self.browse_directory)
-        download_dir_layout.addWidget(browse_button)
+        download_dir_layout.setContentsMargins(0, 0, 0, 0)
+        download_dir_layout.setSpacing(8)
+
+        self.download_path_hint = QLabel("Use the model-type path editor to define folders.")
+        self.download_path_hint.setStyleSheet("color: #aaaaaa;")
+        self.download_path_hint.setWordWrap(True)
+        download_dir_layout.addWidget(self.download_path_hint, 1)
         label_row = QWidget()
         label_row_layout = QHBoxLayout(label_row)
         label_row_layout.setContentsMargins(0, 0, 0, 0)
         label_row_layout.setSpacing(8)
         label_row_layout.addWidget(QLabel("Download Folder:"))
 
-        self.model_paths_button = QPushButton("Per Model Paths...")
+        self.model_paths_button = QPushButton("...")
+        self.model_paths_button.setToolTip("Open per-model download folder settings")
         self.model_paths_button.clicked.connect(self.open_model_path_settings)
         self.model_paths_button.setStyleSheet(f"""
             QPushButton {{
@@ -284,22 +262,6 @@ class SettingsDialog(QDialog):
         button_box.rejected.connect(self.reject)
         layout.addWidget(button_box)
     
-    def browse_directory(self):
-        directory = QFileDialog.getExistingDirectory(
-            self, "Select Download Directory", 
-            self.download_dir_input.text()
-        )
-        if directory:
-            self.download_dir_input.setText(directory)
-
-    def browse_images_directory(self):
-        directory = QFileDialog.getExistingDirectory(
-            self, "Select Images Directory",
-            self.images_dir_input.text()
-        )
-        if directory:
-            self.images_dir_input.setText(directory)
-
     def open_model_path_settings(self):
         dlg = ModelPathSettingsDialog(self.model_download_paths, self)
         if dlg.exec_() == QDialog.Accepted:
@@ -408,7 +370,6 @@ Do you want to start the model recovery process?
     
     def save_settings(self):
         self.settings_manager.set("api_key", self.api_key_input.text())
-        self.settings_manager.set("download_dir", self.download_dir_input.text())
         self.settings_manager.set_model_download_paths(self.model_download_paths)
     # popular period removed
         # priority tags and aliases

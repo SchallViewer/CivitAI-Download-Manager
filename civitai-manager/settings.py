@@ -18,6 +18,24 @@ class SettingsManager:
         "Textures",
     ]
 
+    MODEL_TYPE_ALIASES = {
+        "checkpoint": "Checkpoint",
+        "lora": "LORA",
+        "textualinversion": "TextualInversion",
+        "textual inversion": "TextualInversion",
+        "embedding": "TextualInversion",
+        "embeddings": "TextualInversion",
+        "hypernetwork": "Hypernetwork",
+        "aestheticgradient": "AestheticGradient",
+        "aesthetic gradient": "AestheticGradient",
+        "vae": "VAE",
+        "upscaler": "Upscaler",
+        "controlnet": "Controlnet",
+        "locon": "LoCon",
+        "poses": "Poses",
+        "textures": "Textures",
+    }
+
     def __init__(self):
         self.settings = QSettings("CivitaiManager", "DownloadManager")
         # location of external JSON config (parent directory of this package)
@@ -28,6 +46,7 @@ class SettingsManager:
             "model_download_paths": json.dumps([
                 {"model_type": "Checkpoint", "download_dir": ""}
             ]),
+            "model_type_enabled": json.dumps({"Checkpoint": True}),
             "max_concurrent": 3,
             "nsfw_filter": True,
             "auto_import": True,
@@ -43,6 +62,49 @@ class SettingsManager:
         for key, default_value in self.defaults.items():
             if self.settings.value(key) is None:
                 self.settings.setValue(key, default_value)
+        self._migrate_legacy_download_dir_to_model_paths()
+
+    def _canonical_model_type(self, raw_type: str) -> str:
+        t = str(raw_type or "").strip()
+        if not t:
+            return ""
+        return self.MODEL_TYPE_ALIASES.get(t.lower(), t)
+
+    def get_model_type_enabled_map(self):
+        """Return per-model-type enable flags used to authorize downloads."""
+        raw = self.get("model_type_enabled")
+        defaults = {mt: (mt == "Checkpoint") for mt in self.MODEL_PATH_TYPES}
+        try:
+            if isinstance(raw, dict):
+                data = raw
+            else:
+                data = json.loads(raw) if isinstance(raw, str) and raw.strip() else {}
+        except Exception:
+            data = {}
+
+        out = dict(defaults)
+        if isinstance(data, dict):
+            for key, value in data.items():
+                canonical = self._canonical_model_type(key)
+                if canonical:
+                    out[canonical] = bool(value)
+        return out
+
+    def set_model_type_enabled_map(self, enabled_map):
+        if not isinstance(enabled_map, dict):
+            enabled_map = {}
+        normalized = {mt: False for mt in self.MODEL_PATH_TYPES}
+        for key, value in enabled_map.items():
+            canonical = self._canonical_model_type(key)
+            if canonical:
+                normalized[canonical] = bool(value)
+        self.set("model_type_enabled", json.dumps(normalized, ensure_ascii=False))
+
+    def is_model_type_enabled(self, model_type: str) -> bool:
+        canonical = self._canonical_model_type(model_type)
+        if not canonical:
+            return False
+        return bool(self.get_model_type_enabled_map().get(canonical, False))
     
     def get(self, key: str, default=None) -> str:
         """
@@ -154,6 +216,16 @@ class SettingsManager:
 
         if not cleaned:
             cleaned = default_rows
+
+        # Backward compatibility: if Checkpoint path is empty but legacy download_dir exists,
+        # use legacy path as effective Checkpoint path.
+        legacy_dir = str(self.get("download_dir", "") or "").strip()
+        if legacy_dir:
+            for row in cleaned:
+                if str(row.get("model_type") or "").strip().lower() == "checkpoint":
+                    if not str(row.get("download_dir") or "").strip():
+                        row["download_dir"] = legacy_dir
+                    break
         return cleaned
 
     def set_model_download_paths(self, definitions):
@@ -179,18 +251,70 @@ class SettingsManager:
         if not cleaned:
             cleaned = [{"model_type": "Checkpoint", "download_dir": ""}]
 
+        enabled_map = {mt: False for mt in self.MODEL_PATH_TYPES}
+        for row in cleaned:
+            canonical = self._canonical_model_type(row.get("model_type"))
+            if canonical:
+                enabled_map[canonical] = True
+
+        # Keep legacy download_dir synchronized with Checkpoint for compatibility with
+        # features that still read download_dir (e.g., recovery/maintenance flows).
+        checkpoint_dir = ""
+        for row in cleaned:
+            if str(row.get("model_type") or "").strip().lower() == "checkpoint":
+                checkpoint_dir = str(row.get("download_dir") or "").strip()
+                break
+
         self.set("model_download_paths", json.dumps(cleaned, ensure_ascii=False))
+        self.set_model_type_enabled_map(enabled_map)
+        if checkpoint_dir:
+            self.set("download_dir", checkpoint_dir)
 
     def get_download_dir_for_model_type(self, model_type: str):
         """Return configured download directory for a specific model type, or None if undefined."""
-        target = str(model_type or "").strip().lower()
+        canonical_target = self._canonical_model_type(model_type)
+        target = str(canonical_target or "").strip().lower()
         if not target:
             return None
         for row in self.get_model_download_paths():
-            mt = str(row.get("model_type") or "").strip().lower()
+            mt = self._canonical_model_type(row.get("model_type")).lower()
             if mt == target:
-                return str(row.get("download_dir") or "").strip()
+                resolved = str(row.get("download_dir") or "").strip()
+                if resolved:
+                    return resolved
+                break
+        # Legacy fallback only for Checkpoint to keep old installs compatible.
+        if target == "checkpoint":
+            return str(self.get("download_dir", "") or "").strip() or None
         return None
+
+    def _migrate_legacy_download_dir_to_model_paths(self):
+        """One-way compatibility migration from single download_dir to per-model paths."""
+        try:
+            legacy_dir = str(self.get("download_dir", "") or "").strip()
+            defs = self.get_model_download_paths()
+            changed = False
+
+            checkpoint = None
+            for row in defs:
+                if str(row.get("model_type") or "").strip().lower() == "checkpoint":
+                    checkpoint = row
+                    break
+
+            # Only create default Checkpoint entry when there are NO entries at all.
+            # If user already configured other model types and removed Checkpoint intentionally,
+            # do not re-create it.
+            if not defs:
+                defs = [{"model_type": "Checkpoint", "download_dir": legacy_dir}]
+                changed = True
+            elif legacy_dir and not str(checkpoint.get("download_dir") or "").strip():
+                checkpoint["download_dir"] = legacy_dir
+                changed = True
+
+            if changed:
+                self.set_model_download_paths(defs)
+        except Exception:
+            pass
 
     def delete_api_key(self) -> None:
         """Remove the api_key from QSettings (registry) and persist changes."""
@@ -215,6 +339,7 @@ class SettingsManager:
                     'download_folder': 'download_dir',
                     'priority_tags': 'priority_tags',
                     'model_download_paths': 'model_download_paths',
+                    'model_type_enabled': 'model_type_enabled',
                 }
                 for legacy, new_key in key_map.items():
                     if legacy in data and data[legacy] is not None:
