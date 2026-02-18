@@ -337,6 +337,27 @@ class DatabaseDownloadsMixin:
             print(f"Database error fetching base models: {e}")
             return []
 
+    def get_downloaded_model_types(self):
+        """Return sorted list of model types present in downloaded models."""
+        try:
+            with self._lock:
+                cur = self.conn.cursor()
+                cur.execute(
+                    '''
+                    SELECT DISTINCT m.type
+                    FROM models m
+                    JOIN downloads d ON d.model_id = m.model_id
+                    WHERE d.status IN ('Completed','Imported','Missing')
+                      AND m.type IS NOT NULL
+                      AND TRIM(m.type) <> ''
+                    ORDER BY m.type ASC
+                    '''
+                )
+                return [row[0] for row in cur.fetchall() if row and row[0]]
+        except Exception as e:
+            print(f"Database error fetching model types: {e}")
+            return []
+
     def has_download_record(self, model_id: int, version_id: int) -> bool:
         """Return True if there is a downloads row indicating the version was downloaded/imported/missing."""
         try:

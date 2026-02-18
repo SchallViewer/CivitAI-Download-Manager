@@ -131,9 +131,16 @@ class DownloadedManager:
             # Store original filter states if not already stored
             if not hasattr(main, '_original_filters_saved'):
                 print("DEBUG: Saving original filter states")
+                main._original_model_type_items = []
                 main._original_sort_items = []
                 main._original_period_items = []
                 main._original_base_model_items = []
+
+                # Save original model type combo items
+                for i in range(main.model_type_combo.count()):
+                    text = main.model_type_combo.itemText(i)
+                    data = main.model_type_combo.itemData(i)
+                    main._original_model_type_items.append((text, data))
                 
                 # Save original sort combo items
                 for i in range(main.sort_combo.count()):
@@ -158,11 +165,25 @@ class DownloadedManager:
             # Temporarily disconnect signals to prevent triggering searches during setup
             print("DEBUG: Temporarily disconnecting filter signals for setup")
             try:
+                main.model_type_combo.currentIndexChanged.disconnect()
                 main.sort_combo.currentIndexChanged.disconnect()
                 main.period_combo.currentIndexChanged.disconnect()
                 main.base_model_combo.currentIndexChanged.disconnect()
             except:
                 pass
+
+            # Update model type combo from downloaded model types
+            print("DEBUG: Updating model type combo with downloaded model types")
+            main.model_type_combo.clear()
+            main.model_type_combo.addItem("All Models", "all")
+            model_types = []
+            try:
+                if hasattr(main, 'db_manager'):
+                    model_types = main.db_manager.get_downloaded_model_types() or []
+            except Exception:
+                model_types = []
+            for mt in model_types:
+                main.model_type_combo.addItem(mt, mt)
             
             # Hide NSFW checkbox for downloaded explorer
             print("DEBUG: Hiding NSFW checkbox for downloaded explorer")
@@ -204,6 +225,7 @@ class DownloadedManager:
             # Reconnect signals after setup
             print("DEBUG: Reconnecting filter signals after setup")
             try:
+                main.model_type_combo.currentIndexChanged.connect(main.handle_filter_change)
                 main.sort_combo.currentIndexChanged.connect(main.handle_filter_change)
                 main.period_combo.currentIndexChanged.connect(main.handle_filter_change)
                 main.base_model_combo.currentIndexChanged.connect(main.handle_filter_change)
@@ -250,11 +272,18 @@ class DownloadedManager:
                 # Temporarily disconnect signals to prevent triggering searches during restore
                 print("DEBUG: Temporarily disconnecting filter signals")
                 try:
+                    main.model_type_combo.currentIndexChanged.disconnect()
                     main.sort_combo.currentIndexChanged.disconnect()
                     main.period_combo.currentIndexChanged.disconnect()
                     main.base_model_combo.currentIndexChanged.disconnect()
                 except:
                     pass
+
+                # Restore model type combo
+                print("DEBUG: Restoring model type combo")
+                main.model_type_combo.clear()
+                for text, data in main._original_model_type_items:
+                    main.model_type_combo.addItem(text, data)
                 
                 # Show NSFW checkbox for search explorer
                 print("DEBUG: Showing NSFW checkbox for search explorer")
@@ -283,6 +312,7 @@ class DownloadedManager:
                 # Reconnect signals after restore
                 print("DEBUG: Reconnecting filter signals")
                 try:
+                    main.model_type_combo.currentIndexChanged.connect(main.handle_filter_change)
                     main.sort_combo.currentIndexChanged.connect(main.handle_filter_change)
                     main.period_combo.currentIndexChanged.connect(main.handle_filter_change)
                     main.base_model_combo.currentIndexChanged.connect(main.handle_filter_change)
