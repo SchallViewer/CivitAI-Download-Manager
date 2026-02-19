@@ -1,7 +1,12 @@
-# settings.py
+import copy
 import json
 import os
-from PyQt5.QtCore import QSettings
+from credential_store import WindowsCredentialStore, CredentialStoreError
+
+
+class ConfigValidationError(Exception):
+    """Raised when config.json is missing/invalid for startup."""
+
 
 class SettingsManager:
     MODEL_PATH_TYPES = [
@@ -36,33 +41,27 @@ class SettingsManager:
         "textures": "Textures",
     }
 
-    def __init__(self):
-        self.settings = QSettings("CivitaiManager", "DownloadManager")
-        # location of external JSON config (parent directory of this package)
-        self.config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'config.json')
+    def __init__(self, validate_on_init=True):
+        self.config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "config.json")
+        self._loaded_keys = set()
         self.defaults = {
             "api_key": "",
             "download_dir": os.path.expanduser("~/CivitaiDownloads"),
-            "model_download_paths": json.dumps([
-                {"model_type": "Checkpoint", "download_dir": ""}
-            ]),
-            "model_type_enabled": json.dumps({"Checkpoint": True}),
+            "model_download_paths": [{"model_type": "Checkpoint", "download_dir": ""}],
+            "model_type_enabled": {"Checkpoint": True},
+            "api_key_manager_version": 2,
             "max_concurrent": 3,
             "nsfw_filter": True,
             "auto_import": True,
-            # Comma-separated ordered list of tag priorities (highest first) used for filename primary tag selection
+            "auto_load_popular": False,
             "priority_tags": "meme,concept,character,style,clothing,pose",
-            # Comma-separated list of filename aliases corresponding to priority_tags (same order)
             "tag_aliases": "meme,concept,chr,style,clothing,pose",
-            # workspace images directory is fixed to 'images' under workspace; not user-configurable
+            "registry_path": r"HKCU\\Software\\CivitaiManager\\DownloadManager",
         }
-        # load external config first (if exists) so QSettings picks up values
-        self._load_external_config()
-        # Initialize default values if not set (after external merge)
-        for key, default_value in self.defaults.items():
-            if self.settings.value(key) is None:
-                self.settings.setValue(key, default_value)
-        self._migrate_legacy_download_dir_to_model_paths()
+        self._config_data = self._load_or_create_config()
+        if validate_on_init:
+            self.validate_config_integrity(raise_on_error=True)
+        self._write_config()
 
     def _canonical_model_type(self, raw_type: str) -> str:
         t = str(raw_type or "").strip()
@@ -74,17 +73,9 @@ class SettingsManager:
         """Return per-model-type enable flags used to authorize downloads."""
         raw = self.get("model_type_enabled")
         defaults = {mt: (mt == "Checkpoint") for mt in self.MODEL_PATH_TYPES}
-        try:
-            if isinstance(raw, dict):
-                data = raw
-            else:
-                data = json.loads(raw) if isinstance(raw, str) and raw.strip() else {}
-        except Exception:
-            data = {}
-
         out = dict(defaults)
-        if isinstance(data, dict):
-            for key, value in data.items():
+        if isinstance(raw, dict):
+            for key, value in raw.items():
                 canonical = self._canonical_model_type(key)
                 if canonical:
                     out[canonical] = bool(value)
@@ -98,7 +89,7 @@ class SettingsManager:
             canonical = self._canonical_model_type(key)
             if canonical:
                 normalized[canonical] = bool(value)
-        self.set("model_type_enabled", json.dumps(normalized, ensure_ascii=False))
+        self.set("model_type_enabled", normalized)
 
     def is_model_type_enabled(self, model_type: str) -> bool:
         canonical = self._canonical_model_type(model_type)
@@ -106,7 +97,7 @@ class SettingsManager:
             return False
         return bool(self.get_model_type_enabled_map().get(canonical, False))
     
-    def get(self, key: str, default=None) -> str:
+    def get(self, key: str, default=None):
         """
         Get a setting value with optional default.
         
@@ -117,10 +108,19 @@ class SettingsManager:
         Returns:
             The setting value or the default
         """
-        value = self.settings.value(key)
-        if value is None:
-            return default if default is not None else self.defaults.get(key)
-        return value
+        if key == "api_key":
+            try:
+                return WindowsCredentialStore.get_api_key()
+            except CredentialStoreError:
+                return default if default is not None else self.defaults.get("api_key")
+
+        if key in self._config_data:
+            return self._config_data.get(key)
+
+        if key == "download_folder":
+            return self._config_data.get("download_dir")
+
+        return default if default is not None else self.defaults.get(key)
     
     def set(self, key: str, value) -> None:
         """
@@ -130,15 +130,19 @@ class SettingsManager:
             key: The setting key to set
             value: The value to set
         """
-        self.settings.setValue(key, value)
-        self.settings.sync()  # Ensure settings are saved immediately
-        self._write_external_config()
+        if key == "api_key":
+            normalized = str(value or "").strip()
+            WindowsCredentialStore.set_api_key(normalized)
+            return
+
+        target_key = "download_dir" if key == "download_folder" else key
+        normalized_value = self._normalize_value(target_key, value)
+        self._config_data[target_key] = normalized_value
+        self._write_config()
     
     def save_settings(self) -> None:
         """Force save settings to disk."""
-        self.settings.sync()
-        # Also persist consolidated settings to external JSON file
-        self._write_external_config()
+        self._write_config()
     
     def export_settings(self, file_path: str) -> None:
         """
@@ -147,14 +151,7 @@ class SettingsManager:
         Args:
             file_path: Path to save the settings JSON file
         """
-        settings_data = {}
-        for key in self.defaults.keys():
-            value = self.settings.value(key)
-            if value is not None:
-                settings_data[key] = value
-            else:
-                settings_data[key] = self.defaults[key]
-                
+        settings_data = copy.deepcopy(self._config_data)
         with open(file_path, 'w') as f:
             json.dump(settings_data, f, indent=4)
     
@@ -170,34 +167,33 @@ class SettingsManager:
                 settings_data = json.load(f)
             
             for key, value in settings_data.items():
-                if key in self.defaults:
+                if key == "download_folder":
+                    self.set("download_dir", value)
+                elif key == "api_key":
+                    continue
+                elif key in self.defaults:
                     self.set(key, value)
-            
-            self.settings.sync()  # Ensure imported settings are saved
-            self._write_external_config()
+
+            self.validate_config_integrity(raise_on_error=True)
+            self._write_config()
         except Exception as e:
             raise Exception(f"Failed to import settings: {str(e)}")
     
     def clear(self) -> None:
         """Clear all settings and restore defaults."""
-        self.settings.clear()
-        # Restore defaults
-        for key, value in self.defaults.items():
-            self.settings.setValue(key, value)
-        self.settings.sync()
-        self._write_external_config()
+        try:
+            WindowsCredentialStore.delete_api_key()
+        except CredentialStoreError:
+            pass
+        self._config_data = self._build_default_config()
+        self.validate_config_integrity(raise_on_error=True)
+        self._write_config()
 
     def get_model_download_paths(self):
         """Return list of per-model-type download path definitions."""
         raw = self.get("model_download_paths")
         default_rows = [{"model_type": "Checkpoint", "download_dir": ""}]
-        try:
-            if isinstance(raw, list):
-                data = raw
-            else:
-                data = json.loads(raw) if isinstance(raw, str) and raw.strip() else default_rows
-        except Exception:
-            data = default_rows
+        data = raw if isinstance(raw, list) else default_rows
 
         cleaned = []
         seen = set()
@@ -217,15 +213,6 @@ class SettingsManager:
         if not cleaned:
             cleaned = default_rows
 
-        # Backward compatibility: if Checkpoint path is empty but legacy download_dir exists,
-        # use legacy path as effective Checkpoint path.
-        legacy_dir = str(self.get("download_dir", "") or "").strip()
-        if legacy_dir:
-            for row in cleaned:
-                if str(row.get("model_type") or "").strip().lower() == "checkpoint":
-                    if not str(row.get("download_dir") or "").strip():
-                        row["download_dir"] = legacy_dir
-                    break
         return cleaned
 
     def set_model_download_paths(self, definitions):
@@ -265,7 +252,7 @@ class SettingsManager:
                 checkpoint_dir = str(row.get("download_dir") or "").strip()
                 break
 
-        self.set("model_download_paths", json.dumps(cleaned, ensure_ascii=False))
+        self.set("model_download_paths", cleaned)
         self.set_model_type_enabled_map(enabled_map)
         if checkpoint_dir:
             self.set("download_dir", checkpoint_dir)
@@ -283,91 +270,187 @@ class SettingsManager:
                 if resolved:
                     return resolved
                 break
-        # Legacy fallback only for Checkpoint to keep old installs compatible.
-        if target == "checkpoint":
-            return str(self.get("download_dir", "") or "").strip() or None
         return None
 
-    def _migrate_legacy_download_dir_to_model_paths(self):
-        """One-way compatibility migration from single download_dir to per-model paths."""
-        try:
-            legacy_dir = str(self.get("download_dir", "") or "").strip()
-            defs = self.get_model_download_paths()
-            changed = False
-
-            checkpoint = None
-            for row in defs:
-                if str(row.get("model_type") or "").strip().lower() == "checkpoint":
-                    checkpoint = row
-                    break
-
-            # Only create default Checkpoint entry when there are NO entries at all.
-            # If user already configured other model types and removed Checkpoint intentionally,
-            # do not re-create it.
-            if not defs:
-                defs = [{"model_type": "Checkpoint", "download_dir": legacy_dir}]
-                changed = True
-            elif legacy_dir and not str(checkpoint.get("download_dir") or "").strip():
-                checkpoint["download_dir"] = legacy_dir
-                changed = True
-
-            if changed:
-                self.set_model_download_paths(defs)
-        except Exception:
-            pass
-
     def delete_api_key(self) -> None:
-        """Remove the api_key from QSettings (registry) and persist changes."""
+        """Remove the api_key from Windows Credential Manager."""
         try:
-            # remove will delete the key from the registry-backed QSettings
-            self.settings.remove('api_key')
-            self.settings.sync()
-            # ensure external JSON remains without secrets
-            self._write_external_config()
+            WindowsCredentialStore.delete_api_key()
+        except CredentialStoreError:
+            pass
+
+    def has_api_key(self) -> bool:
+        try:
+            return WindowsCredentialStore.has_api_key()
+        except CredentialStoreError:
+            return False
+
+    def _build_default_config(self):
+        default_download_dir = str(self.defaults["download_dir"])
+        try:
+            os.makedirs(default_download_dir, exist_ok=True)
         except Exception:
             pass
 
-    # --- External JSON config helpers ---
-    def _load_external_config(self):
-        try:
-            path = os.path.normpath(self.config_path)
-            if os.path.isfile(path):
-                with open(path, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                # Map legacy keys if needed
-                key_map = {
-                    'download_folder': 'download_dir',
-                    'priority_tags': 'priority_tags',
-                    'model_download_paths': 'model_download_paths',
-                    'model_type_enabled': 'model_type_enabled',
-                }
-                for legacy, new_key in key_map.items():
-                    if legacy in data and data[legacy] is not None:
-                        self.settings.setValue(new_key, data[legacy])
-                # Do NOT load api_key from external JSON for security reasons.
-        except Exception:
-            pass
+        cfg = {
+            "download_dir": default_download_dir,
+            "model_download_paths": [{"model_type": "Checkpoint", "download_dir": default_download_dir}],
+            "model_type_enabled": copy.deepcopy(self.defaults["model_type_enabled"]),
+            "api_key_manager_version": int(self.defaults["api_key_manager_version"]),
+            "max_concurrent": int(self.defaults["max_concurrent"]),
+            "nsfw_filter": bool(self.defaults["nsfw_filter"]),
+            "auto_import": bool(self.defaults["auto_import"]),
+            "auto_load_popular": bool(self.defaults["auto_load_popular"]),
+            "priority_tags": str(self.defaults["priority_tags"]),
+            "tag_aliases": str(self.defaults["tag_aliases"]),
+            "registry_path": str(self.defaults["registry_path"]),
+        }
+        return cfg
 
-    def _write_external_config(self):
+    def _load_or_create_config(self):
+        path = os.path.normpath(self.config_path)
+        if not os.path.isfile(path):
+            self._loaded_keys = set()
+            cfg = self._build_default_config()
+            self._config_data = cfg
+            self._write_config()
+            return cfg
+
         try:
-            path = os.path.normpath(self.config_path)
-            # gather all known settings
-            out = {}
-            for key in self.defaults.keys():
-                # Skip api_key — we never write secrets to the JSON file
-                if key == 'api_key':
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except json.JSONDecodeError as e:
+            raise ConfigValidationError(f"Invalid JSON syntax in config file: {e}")
+        except Exception as e:
+            raise ConfigValidationError(f"Cannot read config file: {e}")
+
+        if not isinstance(data, dict):
+            raise ConfigValidationError("Config file root must be a JSON object.")
+
+        self._loaded_keys = set(data.keys())
+
+        cfg = self._build_default_config()
+
+        for key in cfg.keys():
+            if key in data:
+                cfg[key] = data[key]
+
+        # Keep unknown keys so compatibility runners can migrate/remove them.
+        for key, value in data.items():
+            if key not in cfg:
+                cfg[key] = value
+
+        return cfg
+
+    def _write_config(self):
+        out = {
+            "download_folder": self._config_data.get("download_dir", self.defaults["download_dir"]),
+            "model_download_paths": self._config_data.get("model_download_paths", []),
+            "model_type_enabled": self._config_data.get("model_type_enabled", {}),
+            "api_key_manager_version": self._config_data.get("api_key_manager_version", self.defaults["api_key_manager_version"]),
+            "max_concurrent": self._config_data.get("max_concurrent", self.defaults["max_concurrent"]),
+            "nsfw_filter": self._config_data.get("nsfw_filter", self.defaults["nsfw_filter"]),
+            "auto_import": self._config_data.get("auto_import", self.defaults["auto_import"]),
+            "auto_load_popular": self._config_data.get("auto_load_popular", self.defaults["auto_load_popular"]),
+            "priority_tags": self._config_data.get("priority_tags", self.defaults["priority_tags"]),
+            "tag_aliases": self._config_data.get("tag_aliases", self.defaults["tag_aliases"]),
+            "registry_path": self._config_data.get("registry_path", self.defaults["registry_path"]),
+        }
+
+        with open(os.path.normpath(self.config_path), "w", encoding="utf-8") as f:
+            json.dump(out, f, indent=2, ensure_ascii=False)
+
+    def _normalize_value(self, key, value):
+        if key in ("download_dir", "priority_tags", "tag_aliases", "registry_path"):
+            return str(value or "").strip()
+        if key == "api_key_manager_version":
+            if isinstance(value, int):
+                return value
+            raise ValueError("'api_key_manager_version' must be an integer.")
+        if key in ("nsfw_filter", "auto_import", "auto_load_popular"):
+            if isinstance(value, bool):
+                return value
+            raise ValueError(f"'{key}' must be a boolean.")
+        if key == "max_concurrent":
+            if isinstance(value, int):
+                return value
+            raise ValueError("'max_concurrent' must be an integer.")
+        if key == "model_download_paths":
+            if isinstance(value, list):
+                return value
+            raise ValueError("'model_download_paths' must be a list.")
+        if key == "model_type_enabled":
+            if isinstance(value, dict):
+                return value
+            raise ValueError("'model_type_enabled' must be a dictionary.")
+        return value
+
+    def validate_config_integrity(self, raise_on_error=False):
+        errors = []
+        cfg = self._config_data
+
+        download_dir = cfg.get("download_dir")
+        if not isinstance(download_dir, str) or not download_dir.strip():
+            errors.append("'download_folder' must be a non-empty string.")
+        elif not os.path.isdir(download_dir):
+            errors.append(f"Download folder does not exist: {download_dir}")
+
+        model_paths = cfg.get("model_download_paths")
+        if not isinstance(model_paths, list):
+            errors.append("'model_download_paths' must be a list of objects.")
+        else:
+            seen_types = set()
+            for i, row in enumerate(model_paths):
+                if not isinstance(row, dict):
+                    errors.append(f"model_download_paths[{i}] must be an object.")
                     continue
-                # external file uses 'download_folder' historically
-                if key == 'download_dir':
-                    out['download_folder'] = self.get(key)
-                else:
-                    out[key] = self.get(key)
-            # ensure priority_tags present even if empty
-            out.setdefault('priority_tags', self.defaults['priority_tags'])
-            out['model_download_paths'] = self.get_model_download_paths()
-            # record the registry path where secrets (api_key) are stored
-            out['registry_path'] = r"HKCU\\Software\\CivitaiManager\\DownloadManager"
-            with open(path, 'w', encoding='utf-8') as f:
-                json.dump(out, f, indent=2)
-        except Exception:
-            pass
+                model_type = row.get("model_type")
+                path = row.get("download_dir")
+                if not isinstance(model_type, str) or not model_type.strip():
+                    errors.append(f"model_download_paths[{i}].model_type must be a non-empty string.")
+                    continue
+                canonical = self._canonical_model_type(model_type)
+                if canonical not in self.MODEL_PATH_TYPES:
+                    errors.append(f"model_download_paths[{i}].model_type is unsupported: {model_type}")
+                key = canonical.lower()
+                if key in seen_types:
+                    errors.append(f"model_download_paths has duplicate model_type: {canonical}")
+                seen_types.add(key)
+
+                if not isinstance(path, str) or not path.strip():
+                    errors.append(f"model_download_paths[{i}].download_dir must be a non-empty string.")
+                elif not os.path.isdir(path):
+                    errors.append(f"model_download_paths[{i}].download_dir does not exist: {path}")
+
+        enabled_map = cfg.get("model_type_enabled")
+        if not isinstance(enabled_map, dict):
+            errors.append("'model_type_enabled' must be an object/dictionary.")
+        else:
+            for key, value in enabled_map.items():
+                canonical = self._canonical_model_type(key)
+                if canonical not in self.MODEL_PATH_TYPES:
+                    errors.append(f"model_type_enabled has unsupported key: {key}")
+                if not isinstance(value, bool):
+                    errors.append(f"model_type_enabled['{key}'] must be boolean.")
+
+        max_concurrent = cfg.get("max_concurrent")
+        if not isinstance(max_concurrent, int):
+            errors.append("'max_concurrent' must be an integer.")
+        elif max_concurrent <= 0:
+            errors.append("'max_concurrent' must be greater than 0.")
+
+        api_key_manager_version = cfg.get("api_key_manager_version")
+        if not isinstance(api_key_manager_version, int):
+            errors.append("'api_key_manager_version' must be an integer.")
+
+        for bool_key in ("nsfw_filter", "auto_import", "auto_load_popular"):
+            if not isinstance(cfg.get(bool_key), bool):
+                errors.append(f"'{bool_key}' must be a boolean.")
+
+        for str_key in ("priority_tags", "tag_aliases"):
+            if not isinstance(cfg.get(str_key), str):
+                errors.append(f"'{str_key}' must be a string.")
+
+        if errors and raise_on_error:
+            raise ConfigValidationError("\n".join(errors))
+        return errors

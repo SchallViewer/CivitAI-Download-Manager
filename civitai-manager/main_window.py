@@ -46,7 +46,7 @@ class MainWindow(
     UtilsMixin,
     CleanupMixin,
 ):
-    def __init__(self):
+    def __init__(self, settings_manager=None):
         super().__init__()
         self.setWindowTitle("Civitai Download Manager")
         self.setGeometry(100, 100, 1200, 800)
@@ -75,7 +75,7 @@ class MainWindow(
         self.download_handler = DownloadHandler(self)
         
         # Initialize modules
-        self.settings_manager = SettingsManager()
+        self.settings_manager = settings_manager or SettingsManager()
         self.db_manager = DatabaseManager()
         self.api_key = self.settings_manager.get("api_key")
         self.api = CivitaiAPI(api_key=self.api_key)

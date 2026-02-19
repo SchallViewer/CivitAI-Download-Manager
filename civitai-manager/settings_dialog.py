@@ -7,6 +7,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtGui import QIcon,QFont
 from constants import PRIMARY_COLOR, BACKGROUND_COLOR, TEXT_COLOR
 from model_path_settings_dialog import ModelPathSettingsDialog
+from api_key_dialog import ApiKeyDialog
 
 
 class SettingsDialog(QDialog):
@@ -45,38 +46,34 @@ class SettingsDialog(QDialog):
         api_section.setStyleSheet(f"color: {PRIMARY_COLOR.name()}; margin-bottom: 10px;")
         layout.addWidget(api_section)
         
-        # API Key
+        # API Key manager
         api_layout = QFormLayout()
         api_layout.setVerticalSpacing(15)
 
-        self.api_key_input = QLineEdit()
-        self.api_key_input.setPlaceholderText("Enter your Civitai API key")
-        api_key = self.settings_manager.get("api_key", "")
-        self.api_key_input.setText(self.settings_manager.get("api_key"))
-        self.api_key_input.setStyleSheet(f"""
-            QLineEdit {{
-                background-color: #2a2a2a;
-                color: {TEXT_COLOR.name()};
-                border: 1px solid {PRIMARY_COLOR.name()};
+        api_row = QHBoxLayout()
+        self.api_key_status = QLabel()
+        self.api_key_status.setStyleSheet("color: #aaaaaa;")
+        self.api_key_status.setWordWrap(True)
+        api_row.addWidget(self.api_key_status, 1)
+
+        self.manage_api_key_button = QPushButton("Manage API Key")
+        self.manage_api_key_button.clicked.connect(self.open_api_key_dialog)
+        self.manage_api_key_button.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {PRIMARY_COLOR.name()};
+                color: white;
+                padding: 6px;
                 border-radius: 4px;
-                padding: 8px;
+            }}
+            QPushButton:hover {{
+                background-color: #9575cd;
             }}
         """)
-        # Add input and clear button in a horizontal layout
-        key_row = QHBoxLayout()
-        key_row.addWidget(self.api_key_input)
-        clear_btn = QPushButton("Clear API Key")
-        clear_btn.setStyleSheet(f"QPushButton {{ background-color: #8b0000; color: white; padding:6px; border-radius:4px;}}")
-        clear_btn.clicked.connect(self.clear_api_key)
-        key_row.addWidget(clear_btn)
-        api_layout.addRow("API Key:", key_row)
+        api_row.addWidget(self.manage_api_key_button)
+        api_layout.addRow("API Key:", api_row)
 
-        self.api_key_input.setText(api_key or "")
-        # Inform user where the API key is stored
-        info_label = QLabel("Note: API key is stored securely in the Windows registry; exported JSON will NOT contain the key.")
-        info_label.setWordWrap(True)
-        info_label.setStyleSheet("color: #aaaaaa; font-size: 11px;")
-        api_layout.addRow(info_label)
+
+        self.refresh_api_key_status()
 
         # Removed obsolete popular period setting (handled directly in explorer filters)
         layout.addLayout(api_layout)
@@ -268,6 +265,17 @@ class SettingsDialog(QDialog):
             self.model_download_paths = dlg.get_definitions()
             self.refresh_model_paths_summary()
 
+    def open_api_key_dialog(self):
+        dlg = ApiKeyDialog(self.settings_manager, self)
+        dlg.exec_()
+        self.refresh_api_key_status()
+
+    def refresh_api_key_status(self):
+        if self.settings_manager.has_api_key():
+            self.api_key_status.setText("Configured")
+        else:
+            self.api_key_status.setText("Not configured")
+
     def refresh_model_paths_summary(self):
         defs = self.model_download_paths or []
         if not defs:
@@ -369,7 +377,6 @@ Do you want to start the model recovery process?
         # If user clicked No, do nothing and stay in settings dialog
     
     def save_settings(self):
-        self.settings_manager.set("api_key", self.api_key_input.text())
         self.settings_manager.set_model_download_paths(self.model_download_paths)
     # popular period removed
         # priority tags and aliases
@@ -394,14 +401,6 @@ Do you want to start the model recovery process?
         self.settings_manager.set("tag_aliases", ",".join(aliases))
     # images folder is fixed to workspace/images; no user setting
         self.accept()
-
-    def clear_api_key(self):
-        """Clear the API key from registry and the input field."""
-        try:
-            self.settings_manager.delete_api_key()
-        except Exception:
-            pass
-        self.api_key_input.clear()
 
     def edit_priority_tag(self):
         """Edit the selected tag/alias pair or cancel edit mode"""

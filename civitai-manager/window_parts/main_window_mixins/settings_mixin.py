@@ -17,10 +17,10 @@ class SettingsMixin:
 
     def open_settings(self):
         dialog = SettingsDialog(self.settings_manager, self)
-        if dialog.exec_() == QDialog.Accepted:
-            new_api_key = self.settings_manager.get("api_key")
-            if new_api_key != self.api_key:
-                self.api_key = new_api_key
-                self.api = CivitaiAPI(api_key=self.api_key)
-                if self.model_grid_layout.count() > 0:
-                    self.load_popular_models()
+        dialog.exec_()
+        new_api_key = self.settings_manager.get("api_key")
+        if new_api_key != self.api_key:
+            self.api_key = new_api_key
+            self.api = CivitaiAPI(api_key=self.api_key)
+            if self.model_grid_layout.count() > 0:
+                self.load_popular_models()

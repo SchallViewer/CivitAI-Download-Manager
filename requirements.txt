@@ -7,6 +7,9 @@ PyQt5>=5.15.0
 # HTTP Requests - For API calls to CivitAI
 requests>=2.28.0
 
+# Secure credential storage (uses Windows Credential Manager backend on Windows)
+keyring>=24.0.0
+
 # Image Processing - For image handling, resizing, and format conversion
 Pillow>=9.0.0
 
