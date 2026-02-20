@@ -1,5 +1,6 @@
 # download_handler.py - Download functionality and file management
 import os
+import shutil
 from typing import Dict, List, Any
 from PyQt5.QtWidgets import QMessageBox, QDialog
 from PyQt5.QtCore import QTimer, Qt
@@ -179,23 +180,31 @@ class DownloadHandler:
                 return tag
         
         # Create download tasks
-        any_added = False
+        pending_downloads = []
+        required_bytes_total = 0
+        unknown_size_count = 0
+
+        def _extract_size_bytes(file_entry):
+            try:
+                size_kb = file_entry.get('sizeKB') if isinstance(file_entry, dict) else None
+                if isinstance(size_kb, (int, float)) and size_kb > 0:
+                    return int(float(size_kb) * 1024.0)
+            except Exception:
+                pass
+            return None
+
         for f in selected_files:
-            # Build filename
             base_fname = f"{self.utils.sanitize_filename(model_name)} - {self.utils.sanitize_filename(version_name)}"
             parts = [base_fname]
             if primary_tag:
-                # Use alias for filename
                 tag_alias = get_tag_alias(primary_tag)
                 parts.append(self.utils.sanitize_filename(tag_alias))
             for ct in custom_tags:
                 parts.append(self.utils.sanitize_filename(ct))
             fname = " - ".join(parts) + ".safetensors"
-            
-            url = f.get('downloadUrl')
+
             save_path = os.path.join(download_dir, fname)
-            
-            # Check if already downloaded
+
             try:
                 model_id = main.current_model.get('id')
                 version_id = main.current_version.get('id')
@@ -203,6 +212,44 @@ class DownloadHandler:
                     continue
             except Exception:
                 pass
+
+            size_bytes = _extract_size_bytes(f)
+            if size_bytes is None:
+                unknown_size_count += 1
+            else:
+                required_bytes_total += size_bytes
+
+            pending_downloads.append({
+                'file': f,
+                'fname': fname,
+                'save_path': save_path,
+            })
+
+        if pending_downloads and required_bytes_total > 0:
+            try:
+                free_bytes = int(shutil.disk_usage(download_dir).free)
+                if free_bytes < required_bytes_total:
+                    required_mib = required_bytes_total / (1024.0 * 1024.0)
+                    free_mib = free_bytes / (1024.0 * 1024.0)
+                    QMessageBox.critical(
+                        main,
+                        "Download Error",
+                        "Not enough free disk space for this download.\n\n"
+                        f"Required: {required_mib:.2f} Mib\n"
+                        f"Available: {free_mib:.2f} Mib\n\n"
+                        f"Target disk path: {download_dir}"
+                    )
+                    return
+            except Exception:
+                pass
+
+        any_added = False
+        for pending in pending_downloads:
+            f = pending['file']
+            fname = pending['fname']
+            save_path = pending['save_path']
+
+            url = f.get('downloadUrl')
             
             # Prepare file metadata
             original_name = f.get('name') or fname

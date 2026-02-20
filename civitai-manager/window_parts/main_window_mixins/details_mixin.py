@@ -202,7 +202,29 @@ class DetailsMixin:
             vname = version.get('name', 'Unknown')
             version = self._normalize_version_payload(version)
             vb = version.get('baseModel') or ''
-            extra = f" — base: {vb}" if vb else ''
+            extra = f" - base: {vb}" if vb else ''
+
+            size_label = ''
+            try:
+                files = version.get('files') or []
+                selected_file = None
+                for f in files:
+                    if isinstance(f, dict) and f.get('type') == 'Model':
+                        selected_file = f
+                        break
+                if selected_file is None:
+                    for f in files:
+                        if isinstance(f, dict):
+                            selected_file = f
+                            break
+
+                if isinstance(selected_file, dict):
+                    size_kb = selected_file.get('sizeKB')
+                    if isinstance(size_kb, (int, float)) and float(size_kb) > 0:
+                        size_mib = float(size_kb) / 1024.0
+                        size_label = f" ({size_mib:.2f} Mib)"
+            except Exception:
+                size_label = ''
             downloaded_flag = False
             try:
                 vid = version.get('id')
@@ -211,7 +233,7 @@ class DetailsMixin:
             except Exception:
                 downloaded_flag = False
 
-            label = f"Version {vname}{extra}"
+            label = f"Version {vname}{extra}{size_label}"
             if downloaded_flag:
                 label = label + "  (Downloaded)"
 
