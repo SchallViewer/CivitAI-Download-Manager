@@ -16,10 +16,12 @@ from window_parts.main_window_mixins import (
     UiMixin,
     ConnectionsMixin,
     DelegationMixin,
+    DiagnosticsMixin,
     SearchMixin,
     SearchViewMixin,
     DetailsMixin,
     ImageMixin,
+    ModeMixin,
     HistoryMixin,
     LayoutMixin,
     SettingsMixin,
@@ -32,17 +34,19 @@ class MainWindow(
     UiMixin,
     ConnectionsMixin,
     DelegationMixin,
+    DiagnosticsMixin,
     SearchMixin,
     SearchViewMixin,
     DetailsMixin,
     ImageMixin,
+    ModeMixin,
     HistoryMixin,
     LayoutMixin,
     SettingsMixin,
     UtilsMixin,
     CleanupMixin,
 ):
-    def __init__(self):
+    def __init__(self, settings_manager=None):
         super().__init__()
         self.setWindowTitle("Civitai Download Manager")
         self.setGeometry(100, 100, 1200, 800)
@@ -71,7 +75,7 @@ class MainWindow(
         self.download_handler = DownloadHandler(self)
         
         # Initialize modules
-        self.settings_manager = SettingsManager()
+        self.settings_manager = settings_manager or SettingsManager()
         self.db_manager = DatabaseManager()
         self.api_key = self.settings_manager.get("api_key")
         self.api = CivitaiAPI(api_key=self.api_key)
@@ -88,6 +92,8 @@ class MainWindow(
         self.details_image_index = 0
         self.model_page = 1
         self.model_has_more = True
+        self._ui_generation = 0
+        self._details_image_generation = 0
         # cache last search metadata (list of model_data dicts)
         self._search_cache = []
 

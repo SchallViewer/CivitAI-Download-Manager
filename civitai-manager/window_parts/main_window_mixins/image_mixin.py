@@ -6,8 +6,10 @@ from ui_components import ModelCard
 class ImageMixin:
     def load_model_image(self, card, image_url):
         headers = self.api.headers if hasattr(self, 'api') else None
+        generation = int(getattr(self, '_ui_generation', 0))
         try:
             setattr(card, '_expected_image_url', image_url)
+            setattr(card, '_image_request_generation', generation)
         except Exception:
             pass
         thread = ImageLoaderThread(image_url, card, headers=headers)
@@ -17,6 +19,14 @@ class ImageMixin:
 
     def set_card_image(self, url, data_bytes, card):
         try:
+            try:
+                req_generation = int(getattr(card, '_image_request_generation', 0))
+                current_generation = int(getattr(self, '_ui_generation', 0))
+                if req_generation != current_generation:
+                    return
+            except Exception:
+                pass
+
             try:
                 expected = getattr(card, '_expected_image_url', None)
                 if expected and url != expected:
@@ -59,6 +69,7 @@ class ImageMixin:
                             headers = self.api.headers if hasattr(self, 'api') else None
                             try:
                                 setattr(card, '_expected_image_url', cand)
+                                setattr(card, '_image_request_generation', int(getattr(self, '_ui_generation', 0)))
                             except Exception:
                                 pass
                             thread = ImageLoaderThread(cand, card, headers=headers)

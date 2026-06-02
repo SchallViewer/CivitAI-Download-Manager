@@ -6,6 +6,90 @@ from typing import Dict, List, Any, Optional
 
 class ModelDataUtils:
     """Utility class for processing model data and metadata."""
+
+    @staticmethod
+    def normalize_version_payload(version: Dict[str, Any]) -> Dict[str, Any]:
+        """Return a normalized version payload with stable keys used by UI."""
+        if not isinstance(version, dict):
+            return {
+                'id': None,
+                'version_id': None,
+                'name': 'Unknown',
+                'baseModel': '',
+                'publishedAt': '',
+                'updatedAt': '',
+                'trainedWords': [],
+                'images': [],
+                'files': [],
+            }
+
+        normalized = dict(version)
+        version_id = version.get('id') or version.get('version_id')
+        base_model = version.get('baseModel') or version.get('base_model') or ''
+        published = version.get('publishedAt') or version.get('createdAt') or version.get('created_at') or version.get('published_at') or ''
+        updated = version.get('updatedAt') or version.get('updated_at') or ''
+        trained_words = version.get('trainedWords') or version.get('trained_words') or []
+        images = version.get('images') or []
+        files = version.get('files') or []
+
+        normalized['id'] = version_id
+        normalized['version_id'] = version_id
+        normalized['name'] = version.get('name') or 'Unknown'
+        normalized['baseModel'] = base_model
+        normalized['publishedAt'] = published
+        normalized['updatedAt'] = updated
+        normalized['trainedWords'] = trained_words if isinstance(trained_words, list) else []
+        normalized['images'] = images if isinstance(images, list) else []
+        normalized['files'] = files if isinstance(files, list) else []
+        return normalized
+
+    @staticmethod
+    def normalize_model_payload(model: Dict[str, Any]) -> Dict[str, Any]:
+        """Return a normalized model payload with stable keys used by UI."""
+        if not isinstance(model, dict):
+            return {
+                'id': None,
+                'model_id': None,
+                'name': 'Untitled Model',
+                'type': '',
+                'creator': {},
+                'creator_name': 'Unknown',
+                'baseModel': '',
+                'description': '',
+                'tags': [],
+                'publishedAt': '',
+                'updatedAt': '',
+                'stats': {},
+                'modelVersions': [],
+            }
+
+        normalized = dict(model)
+        model_id = model.get('id') or model.get('model_id')
+        raw_creator = model.get('creator')
+        creator_name = (
+            raw_creator.get('username') if isinstance(raw_creator, dict)
+            else str(raw_creator) if raw_creator else 'Unknown'
+        )
+
+        versions = model.get('modelVersions') or model.get('versions') or []
+        normalized_versions = []
+        for version in versions:
+            normalized_versions.append(ModelDataUtils.normalize_version_payload(version))
+
+        normalized['id'] = model_id
+        normalized['model_id'] = model_id
+        normalized['name'] = model.get('name') or 'Untitled Model'
+        normalized['type'] = model.get('type') or model.get('modelType') or model.get('model_type') or ''
+        normalized['creator'] = raw_creator if isinstance(raw_creator, dict) else {'username': creator_name}
+        normalized['creator_name'] = creator_name
+        normalized['baseModel'] = model.get('baseModel') or model.get('base_model') or ''
+        normalized['description'] = model.get('description') or 'No description available'
+        normalized['tags'] = model.get('tags') or []
+        normalized['publishedAt'] = model.get('publishedAt') or model.get('createdAt') or model.get('created_at') or model.get('published_at') or ''
+        normalized['updatedAt'] = model.get('updatedAt') or model.get('updated_at') or ''
+        normalized['stats'] = model.get('stats') or {}
+        normalized['modelVersions'] = normalized_versions
+        return normalized
     
     @staticmethod
     def extract_image_url(model: Dict[str, Any]) -> Optional[str]:

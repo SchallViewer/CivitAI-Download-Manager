@@ -1,18 +1,20 @@
 # settings_dialog.py
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QFormLayout, QLineEdit, QPushButton,
-    QFileDialog, QDialogButtonBox, QHBoxLayout, QLabel, QComboBox,
+    QDialogButtonBox, QHBoxLayout, QLabel,
     QListWidget, QListWidgetItem, QWidget, QAbstractItemView
 )
 from PyQt5.QtGui import QIcon,QFont
-from settings import SettingsManager
 from constants import PRIMARY_COLOR, BACKGROUND_COLOR, TEXT_COLOR
+from model_path_settings_dialog import ModelPathSettingsDialog
+from api_key_dialog import ApiKeyDialog
 
 
 class SettingsDialog(QDialog):
     def __init__(self, settings_manager, parent=None):
         super().__init__(parent)
         self.settings_manager = settings_manager
+        self.model_download_paths = self.settings_manager.get_model_download_paths()
         self.setWindowTitle("Settings")
         self.setWindowIcon(QIcon("icons/settings.png"))
         # Make dialog larger and resizable to accommodate new sections
@@ -44,38 +46,34 @@ class SettingsDialog(QDialog):
         api_section.setStyleSheet(f"color: {PRIMARY_COLOR.name()}; margin-bottom: 10px;")
         layout.addWidget(api_section)
         
-        # API Key
+        # API Key manager
         api_layout = QFormLayout()
         api_layout.setVerticalSpacing(15)
 
-        self.api_key_input = QLineEdit()
-        self.api_key_input.setPlaceholderText("Enter your Civitai API key")
-        api_key = self.settings_manager.get("api_key", "")
-        self.api_key_input.setText(self.settings_manager.get("api_key"))
-        self.api_key_input.setStyleSheet(f"""
-            QLineEdit {{
-                background-color: #2a2a2a;
-                color: {TEXT_COLOR.name()};
-                border: 1px solid {PRIMARY_COLOR.name()};
+        api_row = QHBoxLayout()
+        self.api_key_status = QLabel()
+        self.api_key_status.setStyleSheet("color: #aaaaaa;")
+        self.api_key_status.setWordWrap(True)
+        api_row.addWidget(self.api_key_status, 1)
+
+        self.manage_api_key_button = QPushButton("Manage API Key")
+        self.manage_api_key_button.clicked.connect(self.open_api_key_dialog)
+        self.manage_api_key_button.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {PRIMARY_COLOR.name()};
+                color: white;
+                padding: 6px;
                 border-radius: 4px;
-                padding: 8px;
+            }}
+            QPushButton:hover {{
+                background-color: #9575cd;
             }}
         """)
-        # Add input and clear button in a horizontal layout
-        key_row = QHBoxLayout()
-        key_row.addWidget(self.api_key_input)
-        clear_btn = QPushButton("Clear API Key")
-        clear_btn.setStyleSheet(f"QPushButton {{ background-color: #8b0000; color: white; padding:6px; border-radius:4px;}}")
-        clear_btn.clicked.connect(self.clear_api_key)
-        key_row.addWidget(clear_btn)
-        api_layout.addRow("API Key:", key_row)
+        api_row.addWidget(self.manage_api_key_button)
+        api_layout.addRow("API Key:", api_row)
 
-        self.api_key_input.setText(api_key or "")
-        # Inform user where the API key is stored
-        info_label = QLabel("Note: API key is stored securely in the Windows registry; exported JSON will NOT contain the key.")
-        info_label.setWordWrap(True)
-        info_label.setStyleSheet("color: #aaaaaa; font-size: 11px;")
-        api_layout.addRow(info_label)
+
+        self.refresh_api_key_status()
 
         # Removed obsolete popular period setting (handled directly in explorer filters)
         layout.addLayout(api_layout)
@@ -91,36 +89,43 @@ class SettingsDialog(QDialog):
         download_layout.setVerticalSpacing(15)
         
         download_dir_layout = QHBoxLayout()
-        download_dir = self.settings_manager.get("download_dir", "")
-        self.download_dir_input = QLineEdit()
-        self.download_dir_input.setText(download_dir or "")
-        self.download_dir_input.setText(self.settings_manager.get("download_dir"))
-        self.download_dir_input.setStyleSheet(f"""
-            QLineEdit {{
-                background-color: #2a2a2a;
-                color: {TEXT_COLOR.name()};
-                border: 1px solid {PRIMARY_COLOR.name()};
-                border-radius: 4px;
-                padding: 8px;
-            }}
-        """)
-        download_dir_layout.addWidget(self.download_dir_input)
-        
-        browse_button = QPushButton("Browse...")
-        browse_button.setStyleSheet(f"""
+        download_dir_layout.setContentsMargins(0, 0, 0, 0)
+        download_dir_layout.setSpacing(8)
+
+        self.download_path_hint = QLabel("Use the model-type path editor to define folders.")
+        self.download_path_hint.setStyleSheet("color: #aaaaaa;")
+        self.download_path_hint.setWordWrap(True)
+        download_dir_layout.addWidget(self.download_path_hint, 1)
+        label_row = QWidget()
+        label_row_layout = QHBoxLayout(label_row)
+        label_row_layout.setContentsMargins(0, 0, 0, 0)
+        label_row_layout.setSpacing(8)
+        label_row_layout.addWidget(QLabel("Download Folder:"))
+
+        self.model_paths_button = QPushButton("...")
+        self.model_paths_button.setToolTip("Open per-model download folder settings")
+        self.model_paths_button.clicked.connect(self.open_model_path_settings)
+        self.model_paths_button.setStyleSheet(f"""
             QPushButton {{
                 background-color: {PRIMARY_COLOR.name()};
                 color: white;
-                padding: 8px;
+                padding: 6px;
                 border-radius: 4px;
             }}
             QPushButton:hover {{
                 background-color: #9575cd;
             }}
         """)
-        browse_button.clicked.connect(self.browse_directory)
-        download_dir_layout.addWidget(browse_button)
-        download_layout.addRow("Download Folder:", download_dir_layout)
+        label_row_layout.addWidget(self.model_paths_button)
+        label_row_layout.addStretch()
+
+        download_layout.addRow(label_row, download_dir_layout)
+
+        self.model_paths_summary = QLabel()
+        self.model_paths_summary.setStyleSheet("color: #aaaaaa; font-size: 11px;")
+        self.model_paths_summary.setWordWrap(True)
+        download_layout.addRow(self.model_paths_summary)
+        self.refresh_model_paths_summary()
         layout.addLayout(download_layout)
         
         # Tag Priority section
@@ -254,21 +259,32 @@ class SettingsDialog(QDialog):
         button_box.rejected.connect(self.reject)
         layout.addWidget(button_box)
     
-    def browse_directory(self):
-        directory = QFileDialog.getExistingDirectory(
-            self, "Select Download Directory", 
-            self.download_dir_input.text()
-        )
-        if directory:
-            self.download_dir_input.setText(directory)
+    def open_model_path_settings(self):
+        dlg = ModelPathSettingsDialog(self.model_download_paths, self)
+        if dlg.exec_() == QDialog.Accepted:
+            self.model_download_paths = dlg.get_definitions()
+            self.refresh_model_paths_summary()
 
-    def browse_images_directory(self):
-        directory = QFileDialog.getExistingDirectory(
-            self, "Select Images Directory",
-            self.images_dir_input.text()
+    def open_api_key_dialog(self):
+        dlg = ApiKeyDialog(self.settings_manager, self)
+        dlg.exec_()
+        self.refresh_api_key_status()
+
+    def refresh_api_key_status(self):
+        if self.settings_manager.has_api_key():
+            self.api_key_status.setText("Configured")
+        else:
+            self.api_key_status.setText("Not configured")
+
+    def refresh_model_paths_summary(self):
+        defs = self.model_download_paths or []
+        if not defs:
+            self.model_paths_summary.setText("No model-type paths configured.")
+            return
+        non_empty = [d for d in defs if str(d.get("download_dir") or "").strip()]
+        self.model_paths_summary.setText(
+            f"Configured model-type folders: {len(defs)} entries ({len(non_empty)} with valid path set)."
         )
-        if directory:
-            self.images_dir_input.setText(directory)
         
     
     def export_history(self):
@@ -361,8 +377,7 @@ Do you want to start the model recovery process?
         # If user clicked No, do nothing and stay in settings dialog
     
     def save_settings(self):
-        self.settings_manager.set("api_key", self.api_key_input.text())
-        self.settings_manager.set("download_dir", self.download_dir_input.text())
+        self.settings_manager.set_model_download_paths(self.model_download_paths)
     # popular period removed
         # priority tags and aliases
         tags = []
@@ -386,14 +401,6 @@ Do you want to start the model recovery process?
         self.settings_manager.set("tag_aliases", ",".join(aliases))
     # images folder is fixed to workspace/images; no user setting
         self.accept()
-
-    def clear_api_key(self):
-        """Clear the API key from registry and the input field."""
-        try:
-            self.settings_manager.delete_api_key()
-        except Exception:
-            pass
-        self.api_key_input.clear()
 
     def edit_priority_tag(self):
         """Edit the selected tag/alias pair or cancel edit mode"""
