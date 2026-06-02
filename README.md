@@ -7,6 +7,8 @@
 Desktop application for brownsing, downloading and managing Checkpoints, LoRA's and Embedding models from <a href=civitai.com> CivitAI </a> using public REST-API. <br>
 [CivitAI API Documentation](https://developer.civitai.com/docs/intro)
 
+The main focus of this project is to make a way to manage and visualize your models, keeping their trigger words and useful descriptions. 
+Everything is saved and being saved locally. The API Key is saved using **Windows Credential Manager**, and is used to interact with the site (Some models requires the user to be logged before downloading). 
 
 ## Features
 
@@ -44,8 +46,8 @@ Desktop application for brownsing, downloading and managing Checkpoints, LoRA's 
 - Import history data partly loads downloaded model's metadata such as: Trigger words, Model Version, Model's CivitAI website, description
 
 ### Limitations
-- Windows-only (tested on Windows 10/11)
-- Requires internet connection for API access
+- Windows-only (tested on Windows 10/11. Not tested in Linux)
+- Requires internet connection for API access 
 - Large model collections may require significant storage
 
 ### How to use?
