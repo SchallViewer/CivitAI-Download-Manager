@@ -311,7 +311,7 @@ class SettingsDialog(QDialog):
         # Set detailed information
         detailed_info = """
 <b>What this process does:</b>
-• Scans your download folder for model files (.safetensors, .ckpt, .pt, .pth, .bin)
+• Scans the selected model download folders for model files (.safetensors, .ckpt, .pt, .pth, .bin)
 • Calculates SHA256 hash for each file to identify it uniquely
 • Queries CivitAI database using the hash to recover metadata
 • Downloads preview images and stores them in workspace/images folder

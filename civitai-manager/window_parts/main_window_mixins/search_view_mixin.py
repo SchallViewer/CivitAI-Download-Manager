@@ -34,7 +34,7 @@ class SearchViewMixin:
 
             try:
                 self.download_filter_timer.stop()
-                self.download_filter_timer.start(300)
+                self.download_filter_timer.start(600) # Downloaded-model search debounce
             except Exception as e:
                 self._log_exception('search_view:start download_filter_timer', e)
                 self.downloaded_manager.filter_downloaded_models()

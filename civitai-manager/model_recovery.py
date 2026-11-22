@@ -14,7 +14,8 @@ from PyQt5.QtCore import QThread, pyqtSignal, QObject, Qt
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, 
     QProgressBar, QTextEdit, QTableWidget, QTableWidgetItem,
-    QComboBox, QMessageBox, QHeaderView, QFrame
+    QComboBox, QMessageBox, QHeaderView, QFrame, QCheckBox,
+    QScrollArea, QWidget
 )
 from PyQt5.QtGui import QFont, QColor, QImage
 
@@ -124,7 +125,7 @@ class RecoveryWorker(QThread):
     
     def __init__(self, download_folder, db_manager, api_key, settings_manager=None):
         super().__init__()
-        self.download_folder = download_folder
+        self.download_folders = [download_folder] if isinstance(download_folder, str) else list(download_folder or [])
         self.db_manager = db_manager
         self.api_key = api_key
         self.settings_manager = settings_manager
@@ -136,6 +137,25 @@ class RecoveryWorker(QThread):
         self.successful_count = 0
         self.failed_count = 0
         self.skipped_count = 0
+
+    def find_model_files(self):
+        """Find supported model files across the configured download folders."""
+        model_files = []
+        seen_paths = set()
+        supported_extensions = {'.safetensors', '.ckpt', '.pt', '.pth', '.bin'}
+
+        for download_folder in self.download_folders:
+            for root, dirs, files in os.walk(download_folder):
+                for file in files:
+                    if not any(file.lower().endswith(ext) for ext in supported_extensions):
+                        continue
+                    file_path = os.path.join(root, file)
+                    normalized_path = os.path.normcase(os.path.abspath(file_path))
+                    if normalized_path not in seen_paths:
+                        seen_paths.add(normalized_path)
+                        model_files.append(file_path)
+
+        return model_files
         
     def get_primary_tag_from_hierarchy(self, model_data):
         """Determine primary tag using the tag hierarchy from settings"""
@@ -549,16 +569,9 @@ class RecoveryWorker(QThread):
                 })
                 return
             
-            # Find all model files in download folder
-            self.status_update.emit("Scanning download folder for models...")
-            model_files = []
-            supported_extensions = {'.safetensors', '.ckpt', '.pt', '.pth', '.bin'}
-            
-            for root, dirs, files in os.walk(self.download_folder):
-                for file in files:
-                    if any(file.lower().endswith(ext) for ext in supported_extensions):
-                        file_path = os.path.join(root, file)
-                        model_files.append(file_path)
+            # Find all model files in configured download folders
+            self.status_update.emit("Scanning download folders for models...")
+            model_files = self.find_model_files()
             
             if not model_files:
                 self.recovery_finished.emit({
@@ -932,13 +945,17 @@ class RecoveryWorker(QThread):
 class RecoveryProgressDialog(QDialog):
     """Progress dialog for model recovery"""
     
-    def __init__(self, parent=None):
+    def __init__(self, download_folders, db_manager, api_key, settings_manager=None, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Recovering Models Data")
+        self.setWindowTitle("Model Recovery")
         self.setModal(True)
-        self.setFixedSize(500, 200)
+        self.setMinimumSize(520, 320)
         self.worker = None
         self.final_results = None  # Store the final results from worker
+        self.db_manager = db_manager
+        self.api_key = api_key
+        self.settings_manager = settings_manager
+        self.folder_checkboxes = []
         
         self.setStyleSheet(f"""
             QDialog {{
@@ -949,24 +966,49 @@ class RecoveryProgressDialog(QDialog):
         
         layout = QVBoxLayout(self)
         layout.setSpacing(15)
+
+        self.folder_selection_label = QLabel("Select the folders to scan:")
+        layout.addWidget(self.folder_selection_label)
+
+        self.folder_scroll = QScrollArea()
+        self.folder_scroll.setWidgetResizable(True)
+        folder_list = QWidget()
+        folder_list_layout = QVBoxLayout(folder_list)
+        folder_list_layout.setContentsMargins(4, 4, 4, 4)
+        for folder in download_folders:
+            checkbox = QCheckBox(folder["label"])
+            checkbox.setToolTip(folder["path"])
+            checkbox.setChecked(True)
+            self.folder_checkboxes.append((folder["path"], checkbox))
+            folder_list_layout.addWidget(checkbox)
+        folder_list_layout.addStretch()
+        self.folder_scroll.setWidget(folder_list)
+        layout.addWidget(self.folder_scroll, 1)
         
         # Status label
         self.status_label = QLabel("Initializing recovery...")
         self.status_label.setFont(QFont("Segoe UI", 10))
+        self.status_label.hide()
         layout.addWidget(self.status_label)
         
         # Progress bar
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
+        self.progress_bar.hide()
         layout.addWidget(self.progress_bar)
         
         # Progress info
         self.progress_info = QLabel("0 / 0 files processed")
+        self.progress_info.hide()
         layout.addWidget(self.progress_info)
         
-        # Cancel button
-        self.cancel_button = QPushButton("Cancel Recovery")
+        button_layout = QHBoxLayout()
+        self.start_button = QPushButton("Start Recovery")
+        self.start_button.clicked.connect(self.start_recovery)
+        button_layout.addWidget(self.start_button)
+
+        self.cancel_button = QPushButton("Cancel")
         self.cancel_button.setStyleSheet(f"""
             QPushButton {{
                 background-color: #8b0000;
@@ -980,11 +1022,34 @@ class RecoveryProgressDialog(QDialog):
             }}
         """)
         self.cancel_button.clicked.connect(self.cancel_recovery)
-        layout.addWidget(self.cancel_button)
+        button_layout.addWidget(self.cancel_button)
+        layout.addLayout(button_layout)
         
-    def start_recovery(self, download_folder, db_manager, api_key, settings_manager=None):
-        """Start the recovery process"""
-        self.worker = RecoveryWorker(download_folder, db_manager, api_key, settings_manager)
+    def get_selected_download_folders(self):
+        """Return the checked download folders."""
+        return [
+            path for path, checkbox in self.folder_checkboxes
+            if checkbox.isChecked()
+        ]
+
+    def start_recovery(self):
+        """Start the recovery process for checked folders."""
+        download_folders = self.get_selected_download_folders()
+        if not download_folders:
+            QMessageBox.warning(self, "No Folders Selected", "Select at least one folder to scan.")
+            return
+
+        self.folder_selection_label.hide()
+        self.folder_scroll.hide()
+        self.start_button.hide()
+        self.status_label.show()
+        self.progress_bar.show()
+        self.progress_info.show()
+        self.cancel_button.setText("Cancel Recovery")
+
+        self.worker = RecoveryWorker(
+            download_folders, self.db_manager, self.api_key, self.settings_manager
+        )
         self.worker.status_update.connect(self.update_status)
         self.worker.progress_update.connect(self.update_progress)
         self.worker.recovery_finished.connect(self.recovery_finished)
@@ -1409,13 +1474,40 @@ class ModelRecoveryManager:
         """Start the model recovery process"""
         main = self.main_window
         
-        # Get download folder from settings
-        download_folder = main.settings_manager.get('download_dir')
-        if not download_folder or not os.path.exists(download_folder):
+        # Include the legacy folder and all configured per-model-type folders.
+        folder_map = {}
+        legacy_folder = main.settings_manager.get('download_dir')
+        if legacy_folder and os.path.isdir(legacy_folder):
+            folder_key = os.path.normcase(os.path.abspath(legacy_folder))
+            folder_map[folder_key] = {
+                "path": os.path.abspath(legacy_folder),
+                "labels": ["Legacy"],
+            }
+
+        for row in main.settings_manager.get_model_download_paths():
+            folder = row.get('download_dir')
+            if not folder or not os.path.isdir(folder):
+                continue
+            folder_key = os.path.normcase(os.path.abspath(folder))
+            entry = folder_map.setdefault(
+                folder_key, {"path": os.path.abspath(folder), "labels": []}
+            )
+            model_type = str(row.get('model_type') or "").strip()
+            if model_type and model_type not in entry["labels"]:
+                entry["labels"].append(model_type)
+
+        download_folders = [
+            {
+                "path": entry["path"],
+                "label": f"{', '.join(entry['labels']) or 'Download'}: {entry['path']}",
+            }
+            for entry in folder_map.values()
+        ]
+        if not download_folders:
             QMessageBox.warning(
                 main,
                 "Invalid Download Folder",
-                "Please configure a valid download folder in settings before attempting recovery."
+                "Please configure at least one valid model download folder in settings before attempting recovery."
             )
             return
             
@@ -1433,8 +1525,9 @@ class ModelRecoveryManager:
                 return
         
         # Show progress dialog and start recovery
-        progress_dialog = RecoveryProgressDialog(main)
-        progress_dialog.start_recovery(download_folder, main.db_manager, api_key, main.settings_manager)
+        progress_dialog = RecoveryProgressDialog(
+            download_folders, main.db_manager, api_key, main.settings_manager, main
+        )
         
         if progress_dialog.exec_() == QDialog.Accepted:
             # Recovery completed, get results from worker

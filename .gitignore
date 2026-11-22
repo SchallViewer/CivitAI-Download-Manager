@@ -200,6 +200,7 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
+
 *.db
 *.json
 *.png
@@ -212,6 +213,13 @@ _.py
 test*.py
 debug*.py
 images/*
+repomix-output.xml
+.github
+.vscode
+graphify-out/
+.gitattributes
+.agents/
+
 *.lnk
 # Marimo
 marimo/_static/
