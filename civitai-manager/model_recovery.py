@@ -26,8 +26,8 @@ except Exception:
 
 from constants import PRIMARY_COLOR, TEXT_COLOR, BACKGROUND_COLOR
 
-# Use the same image processing constants as download_manager
-MAX_IMAGE_AREA = 700_000  # ~700K pixels cap
+# Keep recovered previews at the same size limit as regular downloads.
+MAX_IMAGE_AREA = 120_000
 
 def _process_and_write_image_bytes(content: bytes, dest_path: str, ext: str) -> None:
     """Resize if larger than MAX_IMAGE_AREA and strip metadata, saving back to dest_path.
@@ -467,10 +467,7 @@ class RecoveryWorker(QThread):
                     if len(unique_images) >= 5:
                         break
             
-            # Use the workspace images folder (not download folder)
-            # Get the script directory and use the images folder relative to it
-            script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            images_dir = os.path.join(script_dir, 'images')
+            images_dir = os.path.join(os.getcwd(), 'images')
             
             # Sanitize model name for folder name (remove invalid characters)
             model_name = model_data.get('name', 'Unknown')
@@ -544,6 +541,40 @@ class RecoveryWorker(QThread):
         except Exception as e:
             print(f"Failed to download images: {e}")
             return []
+
+    def recover_missing_images(self, file_hash):
+        """Recover previews only when this scanned model has no available local previews."""
+        record = self.db_manager.get_download_record_by_hash(file_hash)
+        if not record:
+            return "Registered model details unavailable; preview recovery skipped"
+
+        image_paths = record.get('images', [])
+        if image_paths and all(os.path.isfile(path) for path in image_paths):
+            return "Preview images already available"
+
+        version_data = self.query_model_by_hash(file_hash)
+        if not version_data:
+            return "No preview metadata found on CivitAI"
+
+        model_id = record.get('model_id') or version_data.get('modelId')
+        version_id = record.get('version_id') or version_data.get('id')
+        if not model_id or not version_id:
+            return "Preview metadata is missing model or version identifiers"
+
+        model_data = record.get('model_metadata') or version_data.get('model') or {}
+        model_data.setdefault('id', model_id)
+        if not model_data.get('name'):
+            headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
+            response = requests.get(
+                f"https://civitai.com/api/v1/models/{model_id}",
+                headers=headers,
+                timeout=15,
+            )
+            response.raise_for_status()
+            model_data = response.json()
+
+        images = self.download_images(model_data, version_data, model_id, version_id)
+        return f"Recovered {len(images)} preview image(s)"
     
     def run(self):
         """Main recovery process"""
@@ -662,13 +693,20 @@ class RecoveryWorker(QThread):
                 # Skip if already in database
                 if file_hash in existing_hashes:
                     print(f"[DEBUG] Skipping {filename} - already in database with hash: {file_hash}")
+                    details = 'Already registered in database'
+                    try:
+                        image_status = self.recover_missing_images(file_hash)
+                        details = f'{details}; {image_status}'
+                    except Exception as e:
+                        details = f'{details}; preview recovery failed: {e}'
+                        print(f"[DEBUG] Preview recovery failed for {filename}: {e}")
                     self.results.append({
                         'filename': filename,
                         'status': 'Skipped',
-                        'details': 'Already registered in database'
+                        'details': details
                     })
                     self.skipped_count += 1
-                    self.model_processed.emit(filename, 'Skipped', 'Already registered in database')
+                    self.model_processed.emit(filename, 'Skipped', details)
                     processed_hashes.add(file_hash)
                     continue
                 
