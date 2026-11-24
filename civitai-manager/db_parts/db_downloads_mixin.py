@@ -113,7 +113,7 @@ class DatabaseDownloadsMixin:
             except Exception:
                 vmeta = {}
             cursor.execute('''SELECT local_path FROM images WHERE model_id = ? AND (version_id = ? OR ? IS NULL) AND local_path IS NOT NULL ORDER BY position ASC''', (model_id, version_id, version_id))
-            imgs = [r[0] for r in cursor.fetchall() if r and r[0]]
+            imgs = [r[0] for r in cursor.fetchall() if r and r[0] and os.path.isfile(r[0])]
             return {
                 'download_date': download_date,
                 'file_path': file_path,
@@ -129,6 +129,52 @@ class DatabaseDownloadsMixin:
             }
         except sqlite3.Error as e:
             print(f"Database error: {e}")
+            return None
+
+    def get_download_record_by_hash(self, file_sha256):
+        """Return the registered model, version, and preview paths for a file hash."""
+        try:
+            with self._lock:
+                cursor = self.conn.cursor()
+                cursor.execute('''
+                    SELECT d.model_id, d.version_id, m.metadata, v.metadata
+                    FROM downloads d
+                    LEFT JOIN models m ON m.model_id = d.model_id
+                    LEFT JOIN versions v ON v.version_id = d.version_id
+                    WHERE UPPER(d.file_sha256) = UPPER(?)
+                    ORDER BY d.download_date DESC
+                    LIMIT 1
+                ''', (file_sha256,))
+                row = cursor.fetchone()
+                if not row:
+                    return None
+
+                model_id, version_id, model_metadata, version_metadata = row
+                cursor.execute('''
+                    SELECT local_path FROM images
+                    WHERE model_id = ? AND (version_id = ? OR version_id IS NULL)
+                    ORDER BY position ASC
+                ''', (model_id, version_id))
+                image_paths = [image[0] for image in cursor.fetchall() if image[0]]
+
+            try:
+                model_metadata = json.loads(model_metadata or '{}')
+            except (TypeError, ValueError):
+                model_metadata = {}
+            try:
+                version_metadata = json.loads(version_metadata or '{}')
+            except (TypeError, ValueError):
+                version_metadata = {}
+
+            return {
+                'model_id': model_id,
+                'version_id': version_id,
+                'model_metadata': model_metadata,
+                'version_metadata': version_metadata,
+                'images': image_paths,
+            }
+        except sqlite3.Error as e:
+            print(f"Database error looking up download hash: {e}")
             return None
 
     def is_model_downloaded(self, model_id, version_id, file_path=None):
@@ -243,7 +289,7 @@ class DatabaseDownloadsMixin:
                     pass
                 cursor.execute('SELECT local_path FROM images WHERE model_id = ? AND local_path IS NOT NULL ORDER BY position ASC', (model_id,))
                 img_rows = cursor.fetchall()
-                images = [r[0] for r in img_rows if r and r[0]]
+                images = [r[0] for r in img_rows if r and r[0] and os.path.isfile(r[0])]
                 results.append({
                     'id': row_id,
                     'model_id': model_id,
