@@ -1,8 +1,26 @@
 # ui_helpers.py
 import os
+import ntpath
 import requests
+from urllib.parse import unquote, urlsplit
+from urllib.request import url2pathname
 from PyQt5.QtCore import QThread, pyqtSignal
 from PyQt5.QtWidgets import QDialog, QVBoxLayout, QLabel, QCheckBox, QDialogButtonBox
+
+
+def _local_image_path(source):
+    if not isinstance(source, str):
+        return None
+    if source.lower().startswith('file://'):
+        parsed = urlsplit(source)
+        path = url2pathname(unquote(parsed.path))
+        if parsed.netloc:
+            path = os.path.join('\\\\' + parsed.netloc, path.lstrip('\\/'))
+        return path
+    if os.path.exists(source) or os.path.isabs(source) or ntpath.isabs(source):
+        return source
+    return None
+
 
 class ImageLoaderThread(QThread):
     """
@@ -19,26 +37,20 @@ class ImageLoaderThread(QThread):
 
     def run(self):
         try:
-            # Local file support
-            path = None
-            try:
-                if isinstance(self.url, str) and self.url.lower().startswith('file://'):
-                    path = self.url[7:]
-                elif isinstance(self.url, str) and os.path.exists(self.url):
-                    path = self.url
-            except Exception:
-                path = None
-
+            path = _local_image_path(self.url)
             if path:
                 try:
                     with open(path, 'rb') as f:
                         data = f.read()
                     self.image_loaded.emit(self.url, data, self.target_widget)
-                    return
                 except Exception as e:
                     print(f"Error loading local image '{path}': {e}")
+                return
 
-            # HTTP(S)
+            if not isinstance(self.url, str) or urlsplit(self.url).scheme.lower() not in ('http', 'https'):
+                print(f"Unsupported image source: {self.url}")
+                return
+
             headers = dict(self.headers or {})
             headers.setdefault("User-Agent", "CivitaiDownloadManager/1.0")
             resp = requests.get(self.url, headers=headers, timeout=15)
