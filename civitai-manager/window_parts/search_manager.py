@@ -5,6 +5,7 @@ from PyQt5.QtWidgets import QMessageBox
 from PyQt5.QtCore import QTimer, QThread, pyqtSignal, QObject
 from ui_components import ModelCard
 from window_parts.model_utils import ModelDataUtils
+from window_parts.model_filter_utils import ModelFilterUtils
 
 
 class SearchWorker(QThread):
@@ -240,8 +241,17 @@ class SearchManager:
         try:
             # Get search parameters
             query = main.search_input.text().strip()
-            model_type = main.model_type_combo.currentText()
-            base_model = main.base_model_combo.currentText()
+            model_types = main.model_type_combo.selected_values()
+            base_models = main.base_model_combo.selected_values()
+            if (
+                (not main.model_type_combo.is_all_selected() and not model_types)
+                or (not main.base_model_combo.is_all_selected() and not base_models)
+            ):
+                main.model_has_more = False
+                main._loading_models = False
+                main.status_bar.showMessage("No models match the selected filters")
+                return
+
             sort = main.sort_combo.currentText()
             period = main.period_combo.currentText()
             
@@ -253,17 +263,6 @@ class SearchManager:
                 pass
             
             # Map UI values to API parameters
-            type_mapping = {
-                "All": None,
-                "Checkpoint": "Checkpoint",
-                "LORA": "LORA", 
-                "TextualInversion": "TextualInversion",
-                "Hypernetwork": "Hypernetwork",
-                "AestheticGradient": "AestheticGradient",
-                "Controlnet": "Controlnet",
-                "Poses": "Poses"
-            }
-            
             sort_mapping = {
                 "Most Downloaded": "Most Downloaded",
                 "Most Liked": "Most Liked", 
@@ -277,16 +276,6 @@ class SearchManager:
                 "Month": "Month", 
                 "Week": "Week",
                 "Day": "Day"
-            }
-            
-            base_model_mapping = {
-                "All": None,
-                "SD 1.4": "SD 1.4",
-                "SD 1.5": "SD 1.5",
-                "SD 2.0": "SD 2.0", 
-                "SD 2.1": "SD 2.1",
-                "SDXL 1.0": "SDXL 1.0",
-                "SDXL Turbo": "SDXL Turbo"
             }
             
             # Build API parameters
@@ -307,10 +296,10 @@ class SearchManager:
             
             if query:
                 params['query'] = query
-            if type_mapping.get(model_type):
-                params['types'] = [type_mapping[model_type]]
-            if base_model_mapping.get(base_model):
-                params['baseModels'] = [base_model_mapping[base_model]]
+            if not main.model_type_combo.is_all_selected() and model_types:
+                params['model_type'] = model_types
+            if not main.base_model_combo.is_all_selected() and base_models:
+                params['base_model'] = base_models
             
             # Create and start background worker
             self.search_worker = SearchWorker(main.api, params)
@@ -339,13 +328,19 @@ class SearchManager:
         
         try:
             # Filter by base model if needed (client-side fallback)
-            base_model = main.base_model_combo.currentText()
-            print(f"_on_search_completed: Base model filter: {base_model}")
+            all_base_models = main.base_model_combo.is_all_selected()
+            base_models = main.base_model_combo.selected_values()
+            print(f"_on_search_completed: Base model filter: {base_models}")
             
             # Check if filtering should be skipped
-            if base_model not in ["All", "Any Base", ""]:
+            if not all_base_models and not base_models:
+                models = []
+            elif not all_base_models:
                 before_filter = len(models)
-                models = [m for m in models if self.utils.matches_base_model(m, base_model)]
+                models = [
+                    model for model in models
+                    if self._matches_any_base_model(model, base_models)
+                ]
                 print(f"_on_search_completed: Filtered {before_filter} -> {len(models)} models")
             else:
                 print(f"_on_search_completed: Skipping base model filter (showing all {len(models)} models)")
@@ -402,6 +397,21 @@ class SearchManager:
         except Exception as e:
             print(f"Error processing search results: {e}")
             main.status_bar.showMessage(f"Error processing results: {e}")
+
+    @staticmethod
+    def _matches_any_base_model(model, selected_base_models):
+        bases = [model.get('baseModel') or model.get('base_model')]
+        versions = model.get('modelVersions') or model.get('versions') or []
+        bases.extend(
+            version.get('baseModel') or version.get('base_model')
+            for version in versions
+            if isinstance(version, dict)
+        )
+        return any(
+            ModelFilterUtils.matches_base_model(str(base), selected)
+            for base in bases if base
+            for selected in selected_base_models
+        )
     
     def _on_search_error(self, error_message: str):
         """Handle search error."""

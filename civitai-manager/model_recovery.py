@@ -19,6 +19,8 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtGui import QFont, QColor, QImage
 
+from api import CivitaiAPI
+
 try:
     from PIL import Image as PILImage, ImageOps as PILImageOps
 except Exception:
@@ -128,6 +130,7 @@ class RecoveryWorker(QThread):
         self.download_folders = [download_folder] if isinstance(download_folder, str) else list(download_folder or [])
         self.db_manager = db_manager
         self.api_key = api_key
+        self.api = CivitaiAPI(api_key=api_key)
         self.settings_manager = settings_manager
         self.is_cancelled = False
         
@@ -415,34 +418,26 @@ class RecoveryWorker(QThread):
     def check_api_status(self):
         """Check if CivitAI API is accessible"""
         try:
-            headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
-            response = requests.get("https://civitai.com/api/v1/models?limit=1", 
-                                  headers=headers, timeout=10)
-            return response.status_code == 200
+            self.api.search_models(limit=1, timeout=10)
+            return True
         except Exception:
             return False
             
     def query_model_by_hash(self, file_hash):
         """Query CivitAI API for model by hash"""
         try:
-            headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
-            url = f"https://civitai.com/api/v1/model-versions/by-hash/{file_hash}"
-            print(f"[DEBUG] API Request: {url}")
-            response = requests.get(url, headers=headers, timeout=15)
-            print(f"[DEBUG] API Response Status: {response.status_code}")
-            if response.status_code == 200:
-                data = response.json()
-                print(f"[DEBUG] API Response: Found model '{data.get('model', {}).get('name', 'Unknown')}'")
-                return data
-            elif response.status_code == 404:
-                print(f"[DEBUG] API Response: Hash not found in CivitAI database")
-                return None  # Hash not found
-            else:
-                print(f"[DEBUG] API Response: Error {response.status_code}")
-                response.raise_for_status()
+            data = self.api.get_model_version_by_hash(file_hash, timeout=15)
+            print(f"[DEBUG] API Response: Found model '{data.get('model', {}).get('name', 'Unknown')}'")
+            return data
+        except requests.exceptions.HTTPError as e:
+            if e.response is not None and e.response.status_code == 404:
+                print("[DEBUG] API Response: Hash not found in CivitAI database")
+                return None
+            print(f"[DEBUG] API Query Exception: {e}")
+            raise Exception(f"API query failed: {str(e)}") from e
         except Exception as e:
             print(f"[DEBUG] API Query Exception: {e}")
-            raise Exception(f"API query failed: {str(e)}")
+            raise Exception(f"API query failed: {str(e)}") from e
             
     def download_images(self, model_data, version_data, model_id, version_id):
         """Download and save model images"""
@@ -564,14 +559,7 @@ class RecoveryWorker(QThread):
         model_data = record.get('model_metadata') or version_data.get('model') or {}
         model_data.setdefault('id', model_id)
         if not model_data.get('name'):
-            headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
-            response = requests.get(
-                f"https://civitai.com/api/v1/models/{model_id}",
-                headers=headers,
-                timeout=15,
-            )
-            response.raise_for_status()
-            model_data = response.json()
+            model_data = self.api.get_model_details(model_id, timeout=15)
 
         images = self.download_images(model_data, version_data, model_id, version_id)
         return f"Recovered {len(images)} preview image(s)"
@@ -745,21 +733,8 @@ class RecoveryWorker(QThread):
                     # Always fetch full model data using the modelId for complete information
                     print(f"[DEBUG] Found modelId: {model_id}, fetching full model data...")
                     try:
-                        headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
-                        model_response = requests.get(f"https://civitai.com/api/v1/models/{model_id}", 
-                                                    headers=headers, timeout=15)
-                        if model_response.status_code == 200:
-                            model_data = model_response.json()
-                            print(f"[DEBUG] Successfully fetched model data: {model_data.get('name', 'Unknown')}")
-                        else:
-                            print(f"[DEBUG] Failed to fetch model data: {model_response.status_code}")
-                            # Fall back to basic model data from version response
-                            model_data = version_data.get('model', {})
-                            if not model_data.get('name'):
-                                raise Exception(f"Failed to fetch model data: {model_response.status_code}")
-                            print(f"[DEBUG] Using basic model data from version response: {model_data.get('name', 'Unknown')}")
-                            # Add the model ID to the basic model data
-                            model_data['id'] = model_id
+                        model_data = self.api.get_model_details(model_id, timeout=15)
+                        print(f"[DEBUG] Successfully fetched model data: {model_data.get('name', 'Unknown')}")
                     except Exception as e:
                         print(f"[DEBUG] Error fetching model data: {e}")
                         # Try to use basic model data from version response as fallback

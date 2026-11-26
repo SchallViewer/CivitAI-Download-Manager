@@ -1,7 +1,7 @@
 import requests
 import logging
-from urllib.parse import urlencode
-from constants import API_BASE_URL, ModelType, MainTag
+from urllib.parse import quote
+from constants import API_BASE_URL
 
 class CivitaiAPI:
     def __init__(self, api_key=None):
@@ -9,17 +9,15 @@ class CivitaiAPI:
         self.headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
         self.base_url = API_BASE_URL
     
-    def search_models(self, query="", model_type=None, base_model=None, nsfw=False, sort=None, period=None, limit=20, page=1, cursor=None):
+    def search_models(self, query="", model_type=None, base_model=None, nsfw=False, sort=None, period=None, limit=20, page=1, cursor=None, timeout=30):
         # Build params only with non-empty values to avoid sending empty keys
         params = {}
 
         if query:
             params["query"] = query
 
-        if model_type and str(model_type).lower() != "all":
-            # Convert to Civitai's expected type names
+        if model_type:
             type_map = {
-                # common canonical -> API value
                 "checkpoint": "Checkpoint",
                 "lora": "LORA",
                 "lor a": "LORA",
@@ -30,17 +28,34 @@ class CivitaiAPI:
                 "hypernetwork": "Hypernetwork",
                 "aesthetic": "AestheticGradient",
                 "aestheticgradient": "AestheticGradient",
-                "textures": "Textures",
                 "locon": "LoCon",
                 "controlnet": "Controlnet",
                 "poses": "Poses",
             }
-            api_type = type_map.get(model_type, model_type)
-            params["types"] = api_type
+            model_types = (
+                model_type.split(",") if isinstance(model_type, str)
+                else list(model_type)
+            )
+            api_types = [
+                type_map.get(str(value).strip().lower(), str(value).strip())
+                for value in model_types
+                if str(value).strip() and str(value).strip().lower() != "all"
+            ]
+            if api_types:
+                params["types"] = api_types
 
         if base_model:
-            # API expects baseModels as a comma-separated or single value
-            params["baseModels"] = base_model
+            base_models = (
+                base_model.split(",") if isinstance(base_model, str)
+                else list(base_model)
+            )
+            base_models = [
+                str(value).strip() for value in base_models
+                if str(value).strip()
+                and str(value).strip().lower() not in ("all", "any base")
+            ]
+            if base_models:
+                params["baseModels"] = base_models
 
         # Include NSFW param when explicitly set; allow None to mean omit
         if nsfw is not None:
@@ -70,7 +85,7 @@ class CivitaiAPI:
         print(f"CivitaiAPI.search_models -> Params: {params}")
         logging.debug("CivitaiAPI.search_models -> URL: %s, params: %s", url, params)
 
-        response = requests.get(url, params=params, headers=self.headers, timeout=30)
+        response = requests.get(url, params=params, headers=self.headers, timeout=timeout)
         try:
             response.raise_for_status()
             data = response.json()
@@ -109,20 +124,53 @@ class CivitaiAPI:
             "limit": limit,
             "sort": "Most Downloaded"
         }
-        response = requests.get(f"{self.base_url}/models", 
-                               params=params, 
-                               headers=self.headers)
+        response = requests.get(
+            f"{self.base_url}/models",
+            params=params,
+            headers=self.headers,
+            timeout=30,
+        )
         response.raise_for_status()
         return response.json()
     
-    def get_model_details(self, model_id):
-        response = requests.get(f"{self.base_url}/models/{model_id}", 
-                               headers=self.headers)
+    def get_model_details(self, model_id, timeout=30):
+        model_id = self._positive_id(model_id, "model_id")
+        response = requests.get(
+            f"{self.base_url}/models/{model_id}",
+            headers=self.headers,
+            timeout=timeout,
+        )
         response.raise_for_status()
         return response.json()
     
     def get_model_version(self, version_id):
-        response = requests.get(f"{self.base_url}/model-versions/{version_id}", 
-                               headers=self.headers)
+        version_id = self._positive_id(version_id, "version_id")
+        response = requests.get(
+            f"{self.base_url}/model-versions/{version_id}",
+            headers=self.headers,
+            timeout=30,
+        )
         response.raise_for_status()
         return response.json()
+
+    def get_model_version_by_hash(self, file_hash, timeout=30):
+        if not file_hash:
+            raise ValueError("file_hash must not be empty")
+        path_hash = quote(str(file_hash), safe="")
+        response = requests.get(
+            f"{self.base_url}/model-versions/by-hash/{path_hash}",
+            headers=self.headers,
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    @staticmethod
+    def _positive_id(value, name):
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            raise ValueError(f"{name} must be a positive integer")
+        if parsed <= 0:
+            raise ValueError(f"{name} must be a positive integer")
+        return parsed

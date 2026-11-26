@@ -3,6 +3,7 @@ from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit
 from PyQt5.QtGui import QFont
 from PyQt5.QtCore import Qt
 from constants import PRIMARY_COLOR, BACKGROUND_COLOR, CARD_BACKGROUND, TEXT_COLOR, SECONDARY_TEXT
+from ui_components import CheckableTreeFilter
 
 
 class LeftPanelBuilder:
@@ -71,25 +72,27 @@ class LeftPanelBuilder:
             f"border: 1px solid {PRIMARY_COLOR.name()}; }}"
         )
 
-        host.model_type_combo = QComboBox()
-        host.model_type_combo.addItem("All Models", "all")
-        host.model_type_combo.addItem("Checkpoints", "Checkpoint")
-        host.model_type_combo.addItem("LoRAs", "LORA")
-        host.model_type_combo.addItem("Textures", "Textures")
-        host.model_type_combo.addItem("Hypernetworks", "Hypernetwork")
-        host.model_type_combo.addItem("Embeddings", "TextualInversion")
-        host.model_type_combo.addItem("Aesthetic Gradients", "AestheticGradient")
-        host.model_type_combo.setStyleSheet(combo_style)
+        host.model_type_combo = CheckableTreeFilter("Model")
+        host.model_type_combo.set_items("All Models", [
+            ("Checkpoints", "Checkpoint"),
+            ("LoRAs", "LORA"),
+            ("Hypernetworks", "Hypernetwork"),
+            ("Embeddings", "TextualInversion"),
+            ("Aesthetic Gradients", "AestheticGradient"),
+        ])
 
-        host.base_model_combo = QComboBox()
-        host.base_model_combo.addItem("Any Base", None)
-        host.base_model_combo.addItem("SD 1.5", "SD 1.5")
-        host.base_model_combo.addItem("Illustrious", "illustrious")
-        host.base_model_combo.addItem("SDXL", "SDXL 1.0")
-        host.base_model_combo.addItem("Pony", "pony")
-        host.base_model_combo.addItem("NoobAI (NAI)", "NoobAI")
-        host.base_model_combo.setStyleSheet(combo_style)
+        host.base_model_combo = CheckableTreeFilter("Base")
+        host.base_model_combo.set_items("All Base Models", [
+            ("SD 1.5", "SD 1.5"),
+            ("Illustrious", "Illustrious"),
+            ("SDXL", "SDXL 1.0"),
+            ("Pony", "Pony"),
+            ("NoobAI (NAI)", "NoobAI"),
+        ])
 
+        host.tag_filter = CheckableTreeFilter("Tag")
+        host.tag_filter.set_items("All Tags", [])
+        host.tag_filter.setVisible(False)
         filters_layout.addWidget(host.model_type_combo)
         filters_layout.addWidget(host.base_model_combo)
 
@@ -108,6 +111,7 @@ class LeftPanelBuilder:
         host.period_combo.addItem("Year", "Year")
         host.period_combo.setStyleSheet(combo_style)
         filters_layout.addWidget(host.period_combo)
+        filters_layout.addWidget(host.tag_filter)
 
         host.nsfw_checkbox = QCheckBox("Include NSFW")
         host.nsfw_checkbox.setStyleSheet(f"color: {TEXT_COLOR.name()}; padding: 6px;")
