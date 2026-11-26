@@ -18,8 +18,9 @@ class ConnectionsMixin:
         self.progressive_render_timer = QTimer()
         self.progressive_render_timer.timeout.connect(self.downloaded_manager.render_next_batch)
 
-        self.model_type_combo.currentIndexChanged.connect(self.handle_filter_change)
-        self.base_model_combo.currentIndexChanged.connect(self.handle_filter_change)
+        self.model_type_combo.selectionChanged.connect(self.handle_filter_change)
+        self.base_model_combo.selectionChanged.connect(self.handle_filter_change)
+        self.tag_filter.selectionChanged.connect(self.handle_filter_change)
         self.sort_combo.currentIndexChanged.connect(self.handle_filter_change)
         self.period_combo.currentIndexChanged.connect(self.handle_filter_change)
         try:
