@@ -13,8 +13,10 @@ class ModelFilterUtils:
     @staticmethod
     def matches_model_type(model_type: str, filter_type: str) -> bool:
         try:
-            if not model_type or not filter_type:
+            if not filter_type:
                 return True
+            if not model_type:
+                return False
 
             type_mapping = {
                 'LORA': 'LORA',
@@ -52,8 +54,10 @@ class ModelFilterUtils:
     @staticmethod
     def matches_base_model(model_base: str, filter_base: str) -> bool:
         try:
-            if not model_base or not filter_base:
+            if not filter_base:
                 return True
+            if not model_base:
+                return False
 
             model_base_lower = model_base.lower()
             filter_base_lower = filter_base.lower()
