@@ -3,7 +3,7 @@
 </div>
 
 
-# CivitAI Download Manager v0.4.0-beta
+# CivitAI Download Manager v0.7.1-beta
 Desktop application for brownsing, downloading and managing Checkpoints, LoRA's and Embedding models from <a href=civitai.com> CivitAI </a> using public REST-API. <br>
 [CivitAI API Documentation](https://developer.civitai.com/docs/intro)
 
@@ -26,6 +26,7 @@ Everything is saved and being saved locally. The API Key is saved using **Window
 ### Downloaded Model Explorer
 - Saves metadata into Sqlite3 database.
 - Allows to view downloaded Models.
+- Fast loading of models.
 - Downloaded Models includes preview images.
 
 ### Detail Panel
