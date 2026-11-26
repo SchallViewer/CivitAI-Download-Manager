@@ -220,8 +220,11 @@ repomix-output.xml
 graphify-out/
 .gitattributes
 .agents/
-
+*.rar
 *.lnk
+backup*/
+
+
 # Marimo
 marimo/_static/
 marimo/_lsp/
