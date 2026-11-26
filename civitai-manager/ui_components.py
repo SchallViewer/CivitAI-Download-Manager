@@ -1,12 +1,144 @@
 # ui_components.py
 from PyQt5.QtWidgets import (
     QWidget, QLabel, QHBoxLayout, QVBoxLayout, QFrame, QProgressBar,
-    QPushButton, QSizePolicy
+    QPushButton, QSizePolicy, QTreeWidget, QTreeWidgetItem
 )
 from PyQt5.QtGui import QPixmap, QFont, QColor, QPainter
 from PyQt5.QtGui import QMovie
-from PyQt5.QtCore import QBuffer, QByteArray
-from PyQt5.QtCore import Qt, QSize, pyqtSignal
+from PyQt5.QtCore import QBuffer, QByteArray, QPoint, Qt, QSize, pyqtSignal
+from constants import PRIMARY_COLOR, BACKGROUND_COLOR, TEXT_COLOR
+
+
+class CheckableTreeFilter(QPushButton):
+    selectionChanged = pyqtSignal()
+
+    def __init__(self, title, parent=None):
+        super().__init__(parent)
+        self.title = title
+        self.parent_label = title
+        self._items = []
+        self.setStyleSheet(
+            f"QPushButton {{ background-color: {BACKGROUND_COLOR.name()}; "
+            f"color: {TEXT_COLOR.name()}; border: 1px solid {PRIMARY_COLOR.name()}; "
+            "border-radius: 4px; padding: 6px; text-align: left; }"
+        )
+
+        self._popup = QFrame(self, Qt.Popup)
+        self._popup.setStyleSheet(
+            f"QFrame {{ background-color: {BACKGROUND_COLOR.name()}; "
+            f"border: 1px solid {PRIMARY_COLOR.name()}; }}"
+        )
+        popup_layout = QVBoxLayout(self._popup)
+        popup_layout.setContentsMargins(2, 2, 2, 2)
+        self._tree = QTreeWidget(self._popup)
+        self._tree.setHeaderHidden(True)
+        self._tree.setSelectionMode(QTreeWidget.NoSelection)
+        self._tree.setStyleSheet(
+            f"QTreeWidget {{ background-color: {BACKGROUND_COLOR.name()}; "
+            f"color: {TEXT_COLOR.name()}; border: none; }}"
+            "QTreeWidget::item { padding: 3px; }"
+        )
+        popup_layout.addWidget(self._tree)
+        self._tree.itemChanged.connect(self._on_item_changed)
+        self.clicked.connect(self._show_popup)
+
+    def set_items(self, parent_label, items, selected_values=None):
+        self.parent_label = parent_label
+        self._items = list(items)
+        selected = set(selected_values) if selected_values is not None else None
+        was_blocked = self._tree.blockSignals(True)
+        self._tree.clear()
+
+        root = QTreeWidgetItem([parent_label])
+        root.setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable)
+        self._tree.addTopLevelItem(root)
+        for label, value in self._items:
+            child = QTreeWidgetItem([str(label)])
+            child.setData(0, Qt.UserRole, value)
+            child.setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable)
+            checked = selected is None or value in selected
+            child.setCheckState(0, Qt.Checked if checked else Qt.Unchecked)
+            root.addChild(child)
+
+        root.setCheckState(
+            0,
+            Qt.Checked if selected is None or len(selected) >= len(self._items)
+            else Qt.Unchecked if not selected
+            else Qt.PartiallyChecked,
+        )
+        self._tree.expandAll()
+        self._tree.blockSignals(was_blocked)
+        self._refresh_text()
+
+    def get_items(self):
+        return list(self._items)
+
+    def selected_values(self):
+        root = self._tree.invisibleRootItem().child(0)
+        return [
+            root.child(index).data(0, Qt.UserRole)
+            for index in range(root.childCount())
+            if root.child(index).checkState(0) == Qt.Checked
+        ]
+
+    def selected_labels(self):
+        selected = set(self.selected_values())
+        return [label for label, value in self._items if value in selected]
+
+    def is_all_selected(self):
+        root = self._tree.invisibleRootItem().child(0)
+        return root is None or root.checkState(0) == Qt.Checked
+
+    def _on_item_changed(self, item, column):
+        root = self._tree.invisibleRootItem().child(0)
+        if item is root:
+            state = item.checkState(0)
+            if state != Qt.PartiallyChecked:
+                self._tree.blockSignals(True)
+                for index in range(root.childCount()):
+                    root.child(index).setCheckState(0, state)
+                self._tree.blockSignals(False)
+        else:
+            self._tree.blockSignals(True)
+            states = [root.child(i).checkState(0) for i in range(root.childCount())]
+            if states and all(state == Qt.Checked for state in states):
+                root.setCheckState(0, Qt.Checked)
+            elif any(state == Qt.Checked for state in states):
+                root.setCheckState(0, Qt.PartiallyChecked)
+            else:
+                root.setCheckState(0, Qt.Unchecked)
+            self._tree.blockSignals(False)
+
+        self._refresh_text()
+        self.selectionChanged.emit()
+
+    def _refresh_text(self):
+        labels = self.selected_labels()
+        if self.is_all_selected():
+            description = "All"
+            tooltip = self.parent_label
+        elif not labels:
+            description = "None"
+            tooltip = "No selection"
+        elif len(labels) == 1:
+            description = labels[0]
+            tooltip = labels[0]
+        else:
+            description = f"{len(labels)} selected"
+            tooltip = ", ".join(labels)
+        self.setText(f"{self.title}: {description}")
+        self.setToolTip(f"{self.title}: {tooltip}")
+
+    def _show_popup(self):
+        self._tree.expandAll()
+        row_height = max(20, self._tree.sizeHintForRow(0))
+        popup_height = min(320, row_height * (self._tree.topLevelItem(0).childCount() + 1) + 8)
+        popup_width = max(self.width(), 240)
+        self._popup.setFixedSize(popup_width, popup_height)
+        self._tree.setColumnWidth(0, popup_width - 24)
+        self._popup.move(self.mapToGlobal(QPoint(0, self.height())))
+        self._popup.show()
+
 
 class ModelCard(QFrame):
     clicked = pyqtSignal(object)
