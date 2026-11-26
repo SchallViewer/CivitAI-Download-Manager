@@ -647,7 +647,8 @@ class DetailsMixin:
         if self.current_model:
             model_id = self.current_model.get('id')
             if model_id:
-                url = f"https://civitai.com/models/{model_id}"
+                # Changed to open on 'civitai.red' instead of 'civitai.com' after new release platform that includes sfw and nsfw models
+                url = f"https://civitai.red/models/{model_id}"
                 QDesktopServices.openUrl(QUrl(url))
 
     def _get_downloaded_file_path_for_current(self):
