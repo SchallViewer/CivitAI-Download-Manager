@@ -1,5 +1,6 @@
 import json
 import sqlite3
+from .db_normalization import upsert_model, upsert_version
 
 
 class DatabaseHistoryMixin:
@@ -28,60 +29,14 @@ class DatabaseHistoryMixin:
                     model_id = item.get('model_id')
                     model_meta = item.get('model_metadata') or item.get('model_meta')
                     if model_id and model_meta:
-                        cursor.execute('''
-                            INSERT INTO models (model_id, name, type, base_model, creator, url, description, tags, published_at, updated_at, metadata)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                            ON CONFLICT(model_id) DO UPDATE SET
-                                name=excluded.name,
-                                type=excluded.type,
-                                base_model=excluded.base_model,
-                                creator=excluded.creator,
-                                url=excluded.url,
-                                description=excluded.description,
-                                tags=excluded.tags,
-                                published_at=excluded.published_at,
-                                updated_at=excluded.updated_at,
-                                metadata=excluded.metadata
-                        ''', (
-                            model_id,
-                            model_meta.get('name'),
-                            model_meta.get('type'),
-                            model_meta.get('baseModel') or model_meta.get('base_model'),
-                            (model_meta.get('creator') or {}).get('username') if isinstance(model_meta.get('creator'), dict) else str(model_meta.get('creator') or ''),
-                            model_meta.get('url') or f"https://civitai.com/models/{model_id}",
-                            model_meta.get('description'),
-                            json.dumps(model_meta.get('tags') or []),
-                            model_meta.get('publishedAt') or model_meta.get('createdAt') or model_meta.get('published_at'),
-                            model_meta.get('updatedAt') or model_meta.get('updated_at'),
-                            json.dumps(model_meta)
-                        ))
+                        upsert_model(cursor, model_meta)
                 except Exception:
                     pass
                 try:
                     version_id = item.get('version_id')
                     version_meta = item.get('version_metadata') or item.get('version_meta')
                     if version_id and version_meta:
-                        cursor.execute('''
-                            INSERT INTO versions (version_id, model_id, name, base_model, published_at, updated_at, trained_words, metadata)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                            ON CONFLICT(version_id) DO UPDATE SET
-                                model_id=excluded.model_id,
-                                name=excluded.name,
-                                base_model=excluded.base_model,
-                                published_at=excluded.published_at,
-                                updated_at=excluded.updated_at,
-                                trained_words=excluded.trained_words,
-                                metadata=excluded.metadata
-                        ''', (
-                            version_id,
-                            item.get('model_id'),
-                            version_meta.get('name'),
-                            version_meta.get('baseModel') or version_meta.get('base_model'),
-                            version_meta.get('publishedAt') or version_meta.get('createdAt') or version_meta.get('published_at'),
-                            version_meta.get('updatedAt') or version_meta.get('updated_at'),
-                            json.dumps(version_meta.get('trainedWords') or []),
-                            json.dumps(version_meta)
-                        ))
+                        upsert_version(cursor, dict(version_meta, modelId=item.get('model_id')))
                 except Exception:
                     pass
                 try:
@@ -89,16 +44,14 @@ class DatabaseHistoryMixin:
                     if mid and not (item.get('model_metadata') or item.get('model_meta')):
                         cursor.execute('SELECT 1 FROM models WHERE model_id=? LIMIT 1', (mid,))
                         if cursor.fetchone() is None:
-                            cursor.execute('''INSERT INTO models (model_id, name, type, base_model, creator, url, description, tags, published_at, updated_at, metadata)
-                                              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''', (
+                            cursor.execute('''INSERT INTO models (model_id, name, type, base_model, url, description, published_at, updated_at, raw_json)
+                                              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''', (
                                 mid,
                                 item.get('model_name'),
                                 item.get('model_type'),
                                 item.get('base_model'),
-                                '',
                                 item.get('url') or (f"https://civitai.com/models/{mid}" if mid else None),
                                 None,
-                                json.dumps(item.get('tags') or []),
                                 item.get('published_at'),
                                 item.get('updated_at'),
                                 json.dumps({})
@@ -110,15 +63,14 @@ class DatabaseHistoryMixin:
                     if vid and not (item.get('version_metadata') or item.get('version_meta')):
                         cursor.execute('SELECT 1 FROM versions WHERE version_id=? LIMIT 1', (vid,))
                         if cursor.fetchone() is None:
-                            cursor.execute('''INSERT INTO versions (version_id, model_id, name, base_model, published_at, updated_at, trained_words, metadata)
-                                              VALUES (?, ?, ?, ?, ?, ?, ?, ?)''', (
+                            cursor.execute('''INSERT INTO versions (version_id, model_id, name, base_model, published_at, updated_at, raw_json)
+                                              VALUES (?, ?, ?, ?, ?, ?, ?)''', (
                                 vid,
                                 item.get('model_id'),
                                 item.get('version'),
                                 item.get('base_model'),
                                 item.get('version_published_at'),
                                 item.get('version_updated_at'),
-                                json.dumps(item.get('trained_words') or []),
                                 json.dumps({})
                             ))
                 except Exception:
@@ -128,14 +80,16 @@ class DatabaseHistoryMixin:
                     if imgs and item.get('model_id'):
                         for lp in imgs:
                             try:
-                                cursor.execute('''INSERT INTO images (model_id, version_id, url, local_path, position, is_gif) VALUES (?, ?, ?, ?, ?, ?)''', (
-                                    item.get('model_id'),
-                                    item.get('version_id'),
-                                    None,
-                                    lp,
-                                    0,
-                                    1 if str(lp).lower().endswith('.gif') else 0
-                                ))
+                                if item.get('version_id'):
+                                    cursor.execute('''INSERT INTO images (version_id, url, local_path, position, is_gif) VALUES (?, ?, ?, ?, ?)''', (
+                                        item.get('version_id'), None, lp, 0,
+                                        1 if str(lp).lower().endswith('.gif') else 0
+                                    ))
+                                else:
+                                    cursor.execute('''INSERT INTO legacy_model_images (model_id, url, local_path, position, is_gif) VALUES (?, ?, ?, ?, ?)''', (
+                                        item.get('model_id'), None, lp, 0,
+                                        1 if str(lp).lower().endswith('.gif') else 0
+                                    ))
                             except Exception:
                                 continue
                 except Exception:
@@ -205,7 +159,7 @@ class DatabaseHistoryMixin:
                 cur.execute('''
                 SELECT d.id, d.model_id, d.model_name, d.model_type, d.version, d.version_id, d.main_tag,
                        d.download_date, d.original_file_name, d.file_path, d.file_size, d.status, d.file_sha256, d.restored,
-                       m.metadata AS model_metadata, v.metadata AS version_metadata
+                       m.raw_json AS model_metadata, v.raw_json AS version_metadata
                 FROM downloads d
                 LEFT JOIN models m ON m.model_id = d.model_id
                 LEFT JOIN versions v ON v.version_id = d.version_id
@@ -225,7 +179,7 @@ class DatabaseHistoryMixin:
                     except Exception:
                         version_meta = {}
                     cur2 = self.conn.cursor()
-                    cur2.execute('SELECT local_path FROM images WHERE model_id = ? AND local_path IS NOT NULL ORDER BY position ASC LIMIT 10', (model_id,))
+                    cur2.execute('SELECT local_path FROM images WHERE version_id = ? AND local_path IS NOT NULL ORDER BY position ASC LIMIT 10', (version_id,))
                     imgs = [rr[0] for rr in cur2.fetchall() if rr and rr[0]]
                     results.append({
                         'id': row_id,
@@ -260,8 +214,8 @@ class DatabaseHistoryMixin:
                 cur.execute('''
                 SELECT d.model_id, d.model_name, d.model_type, d.version, d.version_id, d.main_tag,
                        d.download_date, d.original_file_name, d.file_size, d.status, d.file_sha256, d.restored,
-                       m.base_model, m.url, m.tags, m.published_at, m.updated_at,
-                       v.published_at AS version_published_at, v.updated_at AS version_updated_at, v.trained_words
+                       m.base_model, m.url, m.published_at, m.updated_at,
+                       v.published_at AS version_published_at, v.updated_at AS version_updated_at
                 FROM downloads d
                 LEFT JOIN models m ON m.model_id = d.model_id
                 LEFT JOIN versions v ON v.version_id = d.version_id
@@ -270,15 +224,15 @@ class DatabaseHistoryMixin:
                 rows = cur.fetchall()
                 for (model_id, model_name, model_type, version_name, version_id, main_tag,
                      download_date, original_file_name, file_size, status, file_sha256, restored,
-                     base_model, url, tags_json, published_at, updated_at, version_published_at, version_updated_at, trained_words_json) in rows:
-                    try:
-                        tags = json.loads(tags_json) if tags_json else []
-                    except Exception:
-                        tags = []
-                    try:
-                        trained_words = json.loads(trained_words_json) if trained_words_json else []
-                    except Exception:
-                        trained_words = []
+                     base_model, url, published_at, updated_at, version_published_at, version_updated_at) in rows:
+                    cur.execute('''
+                        SELECT t.name FROM model_tags mt
+                        JOIN tags t ON t.tag_id=mt.tag_id
+                        WHERE mt.model_id=? ORDER BY mt.position
+                    ''', (model_id,))
+                    tags = [r[0] for r in cur.fetchall()]
+                    cur.execute('SELECT word FROM version_trained_words WHERE version_id=? ORDER BY position', (version_id,))
+                    trained_words = [r[0] for r in cur.fetchall()]
                     minimal.append({
                         'model_id': model_id,
                         'model_name': model_name,

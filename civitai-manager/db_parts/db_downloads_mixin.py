@@ -2,10 +2,11 @@ import os
 import json
 import sqlite3
 from datetime import datetime
+from .db_normalization import upsert_model, upsert_version, upsert_files, select_main_tag
 
 
 class DatabaseDownloadsMixin:
-    def save_downloaded_model(self, model_data, version, image_paths=None):
+    def save_downloaded_model(self, model_data, version, image_paths=None, file_path=None):
         """Upsert model/version, store cached local images. image_paths: list of local image file paths."""
         try:
             cursor = self.conn.cursor()
@@ -13,72 +14,39 @@ class DatabaseDownloadsMixin:
             if not model_id:
                 return False
 
-            model_url = model_data.get('url') or f"https://civitai.com/models/{model_id}"
-            cursor.execute('''
-                INSERT INTO models (model_id, name, type, base_model, creator, url, description, tags, published_at, updated_at, metadata)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(model_id) DO UPDATE SET
-                    name=excluded.name,
-                    type=excluded.type,
-                    base_model=excluded.base_model,
-                    creator=excluded.creator,
-                    url=excluded.url,
-                    description=excluded.description,
-                    tags=excluded.tags,
-                    published_at=excluded.published_at,
-                    updated_at=excluded.updated_at,
-                    metadata=excluded.metadata
-            ''', (
-                model_id,
-                model_data.get('name', 'Unknown'),
-                model_data.get('type'),
-                model_data.get('baseModel') or model_data.get('base_model'),
-                (model_data.get('creator') or {}).get('username') if isinstance(model_data.get('creator'), dict) else str(model_data.get('creator') or ''),
-                model_url,
-                model_data.get('description'),
-                json.dumps(model_data.get('tags', [])),
-                model_data.get('publishedAt') or model_data.get('createdAt') or model_data.get('created_at') or model_data.get('published_at'),
-                model_data.get('updatedAt') or model_data.get('updated_at'),
-                json.dumps(model_data)
-            ))
+            if not upsert_model(cursor, model_data):
+                self.conn.rollback()
+                return False
 
             version_id = version.get('id') if isinstance(version, dict) else None
             if version_id:
-                cursor.execute('''
-                    INSERT INTO versions (version_id, model_id, name, base_model, published_at, updated_at, trained_words, metadata)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(version_id) DO UPDATE SET
-                        model_id=excluded.model_id,
-                        name=excluded.name,
-                        base_model=excluded.base_model,
-                        published_at=excluded.published_at,
-                        updated_at=excluded.updated_at,
-                        trained_words=excluded.trained_words,
-                        metadata=excluded.metadata
-                ''', (
-                    version_id,
-                    model_id,
-                    version.get('name', 'Unknown'),
-                    version.get('baseModel') or version.get('base_model'),
-                    version.get('publishedAt') or version.get('createdAt') or version.get('created_at') or version.get('published_at'),
-                    version.get('updatedAt') or version.get('updated_at'),
-                    json.dumps(version.get('trainedWords') or []),
-                    json.dumps(version)
-                ))
+                if not version.get('modelId') and not version.get('model_id') and not (version.get('model') or {}).get('id'):
+                    version = dict(version)
+                    version['modelId'] = model_id
+                if not upsert_version(cursor, version):
+                    self.conn.rollback()
+                    return False
+                upsert_files(cursor, version_id, version.get('files'), path_hint=file_path)
 
             if image_paths:
                 try:
                     if version_id:
-                        cursor.execute('DELETE FROM images WHERE model_id = ? AND version_id = ? AND local_path IS NOT NULL', (model_id, version_id))
+                        cursor.execute('DELETE FROM images WHERE version_id = ? AND local_path IS NOT NULL', (version_id,))
                     else:
-                        cursor.execute('DELETE FROM images WHERE model_id = ? AND version_id IS NULL AND local_path IS NOT NULL', (model_id,))
+                        cursor.execute('DELETE FROM legacy_model_images WHERE model_id = ? AND local_path IS NOT NULL', (model_id,))
                 except sqlite3.Error:
                     pass
                 for idx, p in enumerate(image_paths):
-                    cursor.execute('''
-                        INSERT INTO images (model_id, version_id, url, local_path, position, is_gif)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                    ''', (model_id, version_id, None, p, idx, 1 if str(p).lower().endswith('.gif') else 0))
+                    if version_id:
+                        cursor.execute('''
+                            INSERT INTO images (version_id, url, local_path, position, is_gif)
+                            VALUES (?, ?, ?, ?, ?)
+                        ''', (version_id, None, p, idx, 1 if str(p).lower().endswith('.gif') else 0))
+                    else:
+                        cursor.execute('''
+                            INSERT INTO legacy_model_images (model_id, url, local_path, position, is_gif)
+                            VALUES (?, ?, ?, ?, ?)
+                        ''', (model_id, None, p, idx, 1 if str(p).lower().endswith('.gif') else 0))
 
             self.conn.commit()
             return True
@@ -92,8 +60,8 @@ class DatabaseDownloadsMixin:
             cursor = self.conn.cursor()
             cursor.execute('''
                 SELECT d.download_date, d.file_path,
-                       m.model_id, m.name AS model_name, m.type AS model_type, m.url AS model_url, m.metadata AS model_metadata,
-                       v.version_id, v.name AS version, v.metadata AS version_metadata
+                       m.model_id, m.name AS model_name, m.type AS model_type, m.url AS model_url, m.raw_json AS model_metadata,
+                       v.version_id, v.name AS version, v.raw_json AS version_metadata
                 FROM downloads d
                 JOIN models m ON m.model_id = d.model_id
                 JOIN versions v ON v.version_id = d.version_id
@@ -112,7 +80,7 @@ class DatabaseDownloadsMixin:
                 vmeta = json.loads(version_meta or '{}')
             except Exception:
                 vmeta = {}
-            cursor.execute('''SELECT local_path FROM images WHERE model_id = ? AND (version_id = ? OR ? IS NULL) AND local_path IS NOT NULL ORDER BY position ASC''', (model_id, version_id, version_id))
+            cursor.execute('''SELECT local_path FROM images WHERE version_id = ? AND local_path IS NOT NULL ORDER BY position ASC''', (version_id,))
             imgs = [r[0] for r in cursor.fetchall() if r and r[0] and os.path.isfile(r[0])]
             return {
                 'download_date': download_date,
@@ -137,7 +105,7 @@ class DatabaseDownloadsMixin:
             with self._lock:
                 cursor = self.conn.cursor()
                 cursor.execute('''
-                    SELECT d.model_id, d.version_id, m.metadata, v.metadata
+                    SELECT d.model_id, d.version_id, m.raw_json, v.raw_json
                     FROM downloads d
                     LEFT JOIN models m ON m.model_id = d.model_id
                     LEFT JOIN versions v ON v.version_id = d.version_id
@@ -152,9 +120,9 @@ class DatabaseDownloadsMixin:
                 model_id, version_id, model_metadata, version_metadata = row
                 cursor.execute('''
                     SELECT local_path FROM images
-                    WHERE model_id = ? AND (version_id = ? OR version_id IS NULL)
+                    WHERE version_id = ?
                     ORDER BY position ASC
-                ''', (model_id, version_id))
+                ''', (version_id,))
                 image_paths = [image[0] for image in cursor.fetchall() if image[0]]
 
             try:
@@ -265,7 +233,7 @@ class DatabaseDownloadsMixin:
             cursor = self.conn.cursor()
             cursor.execute('''
                 SELECT d.id, d.download_date, d.main_tag,
-                       m.model_id, m.name AS model_name, m.metadata AS model_metadata, m.tags,
+                       m.model_id, m.name AS model_name, m.raw_json AS model_metadata,
                        v.version_id, v.name AS version
                 FROM downloads d
                 JOIN models m ON m.model_id = d.model_id
@@ -275,19 +243,21 @@ class DatabaseDownloadsMixin:
             ''')
             rows = cursor.fetchall()
             results = []
-            for (row_id, download_date, main_tag, model_id, model_name, model_meta, tags_json, version_id, version_name) in rows:
+            for (row_id, download_date, main_tag, model_id, model_name, model_meta, version_id, version_name) in rows:
                 try:
                     mmeta = json.loads(model_meta or '{}')
                 except Exception:
                     mmeta = {}
 
-                try:
-                    db_tags = json.loads(tags_json or '[]')
-                    if db_tags and ('tags' not in mmeta or not mmeta['tags']):
-                        mmeta['tags'] = db_tags
-                except Exception:
-                    pass
-                cursor.execute('SELECT local_path FROM images WHERE model_id = ? AND local_path IS NOT NULL ORDER BY position ASC', (model_id,))
+                cursor.execute('''
+                    SELECT t.name
+                    FROM model_tags mt JOIN tags t ON t.tag_id=mt.tag_id
+                    WHERE mt.model_id=? ORDER BY mt.position
+                ''', (model_id,))
+                db_tags = [r[0] for r in cursor.fetchall()]
+                if db_tags and ('tags' not in mmeta or not mmeta['tags']):
+                    mmeta['tags'] = db_tags
+                cursor.execute('SELECT local_path FROM images WHERE version_id = ? AND local_path IS NOT NULL ORDER BY position ASC', (version_id,))
                 img_rows = cursor.fetchall()
                 images = [r[0] for r in img_rows if r and r[0] and os.path.isfile(r[0])]
                 results.append({
@@ -314,6 +284,7 @@ class DatabaseDownloadsMixin:
             status = "Failed"
         try:
             cursor = self.conn.cursor()
+            primary_tag = primary_tag or select_main_tag(model_data.get('tags'))
             try:
                 cursor.execute('''SELECT id, status, file_sha256, file_path FROM downloads WHERE model_id=? AND version_id=? ORDER BY download_date DESC LIMIT 1''', (
                     model_data.get('id'), version.get('id')))

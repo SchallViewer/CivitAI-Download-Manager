@@ -151,7 +151,7 @@ class DatabaseMaintenanceMixin:
                 if cur.fetchone() is None:
                     try:
                         try:
-                            cur.execute('SELECT local_path FROM images WHERE model_id=? AND local_path IS NOT NULL', (model_id,))
+                            cur.execute('SELECT local_path FROM legacy_model_images WHERE model_id=? AND local_path IS NOT NULL', (model_id,))
                             mimg_rows = cur.fetchall()
                             for (mpath,) in mimg_rows:
                                 if mpath and os.path.exists(mpath):
@@ -162,7 +162,7 @@ class DatabaseMaintenanceMixin:
                                         pass
                         except Exception:
                             pass
-                        cur.execute('DELETE FROM images WHERE model_id=?', (model_id,))
+                        cur.execute('DELETE FROM legacy_model_images WHERE model_id=?', (model_id,))
                     except Exception:
                         pass
                     cur.execute('DELETE FROM models WHERE model_id=?', (model_id,))

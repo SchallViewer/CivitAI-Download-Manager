@@ -143,12 +143,37 @@ class PostProcessTask(QRunnable):
             if hasattr(self, 'db_manager') and self.model_data and self.version and self.file_path:
                 # file_size is passed in MB
                 try:
-                    # If DB already knows this model+version and the file exists, avoid duplicate entries
                     model_id = self.model_data.get('id')
                     version_id = self.version.get('id')
+
+                    # Persist model, version, and every API file before writing history.
+                    # This guarantees the normalized rows exist before downloads is marked complete.
                     try:
-                        if not self.db_manager.is_model_downloaded(model_id, version_id, file_path=self.file_path):
-                            try:
+                        metadata_saved = self.db_manager.save_downloaded_model(
+                            self.model_data,
+                            self.version,
+                            image_paths=None,
+                            file_path=self.file_path,
+                        )
+                    except Exception as e:
+                        metadata_saved = False
+                        _append_log(f"PostProcessTask.run: save_downloaded_model failed: {e}")
+
+                    if not metadata_saved:
+                        self.db_manager.record_download(
+                            self.model_data,
+                            self.version,
+                            self.file_path,
+                            self.file_size,
+                            status="Failed",
+                            original_file_name=self.task_metadata.get('original_file_name'),
+                            file_sha256=self.task_metadata.get('file_sha256'),
+                            primary_tag=self.task_metadata.get('primary_tag'),
+                        )
+                        _append_log("PostProcessTask.run: metadata persistence failed; download not marked Complete")
+                    else:
+                        try:
+                            if not self.db_manager.is_model_downloaded(model_id, version_id, file_path=self.file_path):
                                 self.db_manager.record_download(
                                     self.model_data,
                                     self.version,
@@ -157,44 +182,12 @@ class PostProcessTask(QRunnable):
                                     status="Completed",
                                     original_file_name=self.task_metadata.get('original_file_name'),
                                     file_sha256=self.task_metadata.get('file_sha256'),
-                                    primary_tag=self.task_metadata.get('primary_tag')
+                                    primary_tag=self.task_metadata.get('primary_tag'),
                                 )
-                            except Exception as e:
-                                _append_log(f"PostProcessTask.run: record_download failed: {e}")
-                        else:
-                            _append_log(f"PostProcessTask.run: skipping record_download, already present for {model_id}/{version_id}")
-                    except Exception as e:
-                        _append_log(f"PostProcessTask.run: is_model_downloaded check failed: {e}")
-
-                    # Upsert model/version and files into normalized tables (including model URL)
-                    try:
-                        # Save main file row
-                        try:
-                            file_entry = None
-                            for f in (self.version.get('files') or []):
-                                if f.get('type') == 'Model' and f.get('name', '').endswith('.safetensors'):
-                                    file_entry = f
-                                    break
-                            if file_entry:
-                                cur = self.db_manager.conn.cursor()
-                                cur.execute('''
-                                    INSERT INTO files (version_id, name, type, size, download_url, format, sha256, path)
-                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                                ''', (
-                                    version_id,
-                                    file_entry.get('name'),
-                                    file_entry.get('type'),
-                                    float(file_entry.get('sizeKB', 0)) * 1024.0 if isinstance(file_entry.get('sizeKB'), (int, float)) else None,
-                                    file_entry.get('downloadUrl'),
-                                    file_entry.get('format'),
-                                    file_entry.get('hashes', {}).get('SHA256') if isinstance(file_entry.get('hashes'), dict) else None,
-                                    self.file_path
-                                ))
-                                self.db_manager.conn.commit()
+                            else:
+                                _append_log(f"PostProcessTask.run: skipping duplicate Completed entry for {model_id}/{version_id}")
                         except Exception as e:
-                            _append_log(f"PostProcessTask.run: files insert failed: {e}")
-                    except Exception:
-                        pass
+                            _append_log(f"PostProcessTask.run: record_download failed: {e}")
 
                     # Save preview images (up to 5) for THIS VERSION under a per-model folder
                     try:
@@ -275,7 +268,12 @@ class PostProcessTask(QRunnable):
                         try:
                             if hasattr(self, 'db_manager'):
                                 # save_downloaded_model will upsert existing entries
-                                self.db_manager.save_downloaded_model(self.model_data, self.version, image_paths=saved_paths)
+                                self.db_manager.save_downloaded_model(
+                                    self.model_data,
+                                    self.version,
+                                    image_paths=saved_paths,
+                                    file_path=self.file_path,
+                                )
                         except Exception as e:
                             _append_log(f"PostProcessTask.run: save_downloaded_model failed: {e}")
                     except Exception as e:
